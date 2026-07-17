@@ -1,0 +1,54 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Logs and local runtime data
+*.log
+email_audit.log
+*.sqlite3
+*.db
+
+# Jupyter / notebooks
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE folders
+.vscode/
+.idea/
+
+# Local test / sample data (optional)
+candidates.xlsx
+data/
+*.pdf
+*.docx
+*.doc
+*.txt
+
+# Avis recruteur (contient des noms de candidats, ne doit pas être commité)
+rl/feedback_log.jsonl
+
+# MCP / local tool artifacts
+.mcp/
