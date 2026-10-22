@@ -1,0 +1,22 @@
+# Interface
+streamlit>=1.40
+
+# Orchestration multi-agent
+langgraph>=1.0
+pydantic>=2.0
+
+# LLM et outils MCP
+mistralai>=1.0
+mcp>=1.0
+
+# Extraction PDF (native + fallback OCR côté serveur MCP)
+pdfplumber>=0.11
+pymupdf>=1.24
+
+# Utilitaires
+numpy>=1.26
+python-dotenv>=1.0
+requests>=2.31
+
+# Uniquement pour scripts/generate_sample_pdf.py
+reportlab>=4.0

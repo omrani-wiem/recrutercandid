@@ -1,5 +1,7 @@
 # Système multi-agent de matching CV / offres d'emploi
 
+[![CI](https://github.com/omrani-wiem/recrutercandid/actions/workflows/ci.yml/badge.svg)](https://github.com/omrani-wiem/recrutercandid/actions/workflows/ci.yml)
+
 Interface façon "site carrière côté RH" : on choisit un domaine (Commerce, Tech, Finance,
 Opérations), on parcourt ses offres, on voit les CV qui ont candidaté, on lance l'analyse,
 et on obtient un classement cliquable avec score, explication, décision et email de refus.
@@ -15,10 +17,45 @@ Architecture hybride : nœuds fonction déterministes + nœuds LLM single-shot o
   action explicite du recruteur, il ne peut jamais deviner une approbation
 - Envoi d'e-mail exposé comme outil MCP séparé (le LLM ne peut jamais envoyer directement)
 - Persistance simple en JSON (offres, candidats, résultats) 
+## Démo rapide (5 minutes)
+
+**Sans clé d'API** : lancer les tests (ils simulent les appels LLM, aucun réseau nécessaire).
+
+```bash
+git clone https://github.com/omrani-wiem/recrutercandid.git
+cd recrutercandid
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+MISTRAL_API_KEY=placeholder python -m unittest discover -s tests -v
+```
+
+**Avec une clé Mistral** : essayer l'application complète.
+
+```bash
+cp env.example .env         # renseigner MISTRAL_API_KEY (les autres variables sont optionnelles)
+python scripts/generate_sample_pdf.py   # régénère samples/example_cv.pdf si besoin
+streamlit run app.py
+```
+
+1. Ouvrir <http://localhost:8501>. Au premier lancement, les mots de passe des comptes de démo
+   `recruteur` et `etudiant` sont ceux de `DEMO_RECRUITER_PASSWORD` / `DEMO_STUDENT_PASSWORD`
+   dans `.env`, ou, s'ils sont vides, des mots de passe aléatoires affichés **une seule fois dans
+   le terminal**.
+2. Se connecter en `recruteur`. Quatre offres d'exemple (Tech, Finance, Commerce, Opérations) sont déjà créées.
+3. Dans la barre latérale, **Vivier de CV** : ajouter `samples/example_cv.pdf` (un CV de Data Engineer).
+4. Choisir le domaine **Tech**, ouvrir l'offre *Data Engineer Senior*, puis cliquer sur
+   **Analyser / relancer les candidats**.
+5. Consulter le classement et le détail du candidat : score sur 20, explication, décision
+   (shortlist, zone grise ou rejet) et, en cas de rejet, brouillon d'e-mail de refus **à valider
+   avant tout envoi**.
+
+L'envoi réel d'e-mails (Resend), l'OCR des CV scannés (Qwen VLM) et la recherche d'offres côté
+étudiant (Adzuna) sont optionnels : sans leurs clés, le reste de l'application fonctionne.
+
 ## Structure
 
 ```
-cv_matching_system/
+recrutercandid/
 ├── app.py                          # Interface Streamlit : domaines -> offres -> candidats -> classement -> détail
 ├── data_store.py                   # Persistance JSON (offres, candidats, résultats) + offres d'exemple
 ├── pipeline_runner.py              # Pont entre l'UI et les pauses/reprises du graphe LangGraph
@@ -76,7 +113,7 @@ la base d'un texte de CV, qui est une entrée non fiable par définition.
 
 ```bash
 # Se placer dans le dossier du projet
-cd cv_matching_system
+cd recrutercandid
 
 # Créer l'environnement virtuel (dossier .venv)
 python3 -m venv .venv
@@ -101,7 +138,7 @@ pip install pdfplumber
 ### 3. Configurer les clés d'API
 
 ```bash
-cp .env.example .env
+cp env.example .env
 nano .env   # ou l'éditeur de votre choix, renseignez MISTRAL_API_KEY, RESEND_API_KEY, etc.
 ```
 

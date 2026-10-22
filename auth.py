@@ -2,17 +2,20 @@
 Authentification simple par comptes stockés localement (data/users.json).
 Mots de passe hashés (PBKDF2 + sel), jamais stockés en clair.
 
-Comptes par défaut créés au premier lancement :
-  - recruteur / recruteur  (role="recruteur")
-  - etudiant  / etudiant   (role="etudiant")
+Comptes de démo créés au premier lancement (rôles "recruteur" et "etudiant").
+Les mots de passe viennent de DEMO_RECRUITER_PASSWORD et DEMO_STUDENT_PASSWORD
+(voir env.example). S'ils ne sont pas définis, un mot de passe aléatoire est généré
+et affiché une seule fois dans la console : aucun mot de passe n'est écrit en dur.
 
 Extensible : add_user() permet d'ajouter d'autres comptes plus tard (ex: page d'admin,
 ou inscription libre côté étudiant).
 """
 from __future__ import annotations
 import hashlib
+import hmac
 import json
 import os
+import secrets
 from pathlib import Path
 
 DATA_DIR = Path(__file__).parent / "data"
@@ -46,10 +49,20 @@ def _save_users(users: dict) -> None:
         json.dump(users, f, ensure_ascii=False, indent=2)
 
 
+def _demo_password(env_var: str, username: str) -> str:
+    """Mot de passe d'un compte de démo : variable d'environnement, sinon aléatoire."""
+    password = os.getenv(env_var, "").strip()
+    if password:
+        return password
+    password = secrets.token_urlsafe(12)
+    print(f"[auth] Compte de démo '{username}' créé. Mot de passe généré (affiché une seule fois) : {password}")
+    return password
+
+
 def _seed_default_users() -> dict:
     return {
-        "recruteur": _make_user_entry("recruteur", ROLE_RECRUTEUR),
-        "etudiant": _make_user_entry("etudiant", ROLE_ETUDIANT),
+        "recruteur": _make_user_entry(_demo_password("DEMO_RECRUITER_PASSWORD", "recruteur"), ROLE_RECRUTEUR),
+        "etudiant": _make_user_entry(_demo_password("DEMO_STUDENT_PASSWORD", "etudiant"), ROLE_ETUDIANT),
     }
 
 
@@ -79,6 +92,6 @@ def verify_login(username: str, password: str) -> str | None:
     if not entry:
         return None
     salt = bytes.fromhex(entry["salt"])
-    if _hash_password(password, salt) == entry["password_hash"]:
+    if hmac.compare_digest(_hash_password(password, salt), entry["password_hash"]):
         return entry["role"]
     return None

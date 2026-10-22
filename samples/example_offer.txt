@@ -1,0 +1,5 @@
+Développeur Python / Data (H/F)
+
+Missions : développer des pipelines de données, déployer des API, travailler avec l'équipe produit.
+Profil : 2 ans d'expérience minimum, maîtrise de Python et SQL, notions de machine learning.
+Atouts : Docker, Git, anglais courant.

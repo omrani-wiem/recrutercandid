@@ -1,7 +1,10 @@
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 
+import os
+
 output_path = "samples/example_cv.pdf"
+os.makedirs("samples", exist_ok=True)
 
 c = canvas.Canvas(output_path, pagesize=letter)
 c.setFont("Helvetica", 13)

@@ -43,12 +43,16 @@ Thumbs.db
 candidates.xlsx
 data/
 *.pdf
+!samples/example_cv.pdf
 *.docx
 *.doc
 *.txt
+!requirements.txt
+!samples/example_offer.txt
 
 # Avis recruteur (contient des noms de candidats, ne doit pas être commité)
 rl/feedback_log.jsonl
 
 # MCP / local tool artifacts
 .mcp/
+.env

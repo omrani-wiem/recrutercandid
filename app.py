@@ -30,13 +30,13 @@ load_dotenv()
 st.set_page_config(page_title="Tri de CV", page_icon="📄", layout="wide")
 
 STATUS_LABELS = {
-    STATUS_SHORTLISTED: ("✅ Retenu", "success"),
-    STATUS_PENDING_DECISION: ("🟡 Décision à prendre", "warning"),
-    STATUS_PENDING_EMAIL_REVIEW: ("🟡 Email à valider", "warning"),
-    STATUS_REJECTED_EMAIL_SENT: ("✉️ Refusé, email envoyé", "info"),
+    STATUS_SHORTLISTED: (" Retenu", "success"),
+    STATUS_PENDING_DECISION: (" Décision à prendre", "warning"),
+    STATUS_PENDING_EMAIL_REVIEW: (" Email à valider", "warning"),
+    STATUS_REJECTED_EMAIL_SENT: (" Refusé, email envoyé", "info"),
     STATUS_REJECTED_EMAIL_CANCELLED: ("Refusé, email annulé", "info"),
-    STATUS_REJECTED_EMAIL_FAILED: ("⚠️ Refusé, email non envoyé", "warning"),
-    STATUS_ERROR: ("❌ Erreur", "error"),
+    STATUS_REJECTED_EMAIL_FAILED: (" Refusé, email non envoyé", "warning"),
+    STATUS_ERROR: (" Erreur", "error"),
     None: ("Non évalué", "off"),
 }
 
@@ -130,7 +130,7 @@ def render_login():
                 st.rerun()
             else:
                 st.error("Identifiants incorrects.")
-    st.caption("Comptes de démo : recruteur / recruteur — étudiant / etudiant")
+    st.caption("Comptes de démo : « recruteur » et « etudiant » (mots de passe définis dans .env)")
 
 
 if not st.session_state.authenticated:
