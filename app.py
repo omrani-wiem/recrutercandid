@@ -381,6 +381,23 @@ def render_candidate_detail():
             "fichier scanné). Vérifiez son contenu manuellement avant de vous fier au score."
         )
 
+    ocr_quality_score = result.get("ocr_quality_score")
+    if ocr_quality_score is not None:
+        st.caption(
+            "Qualité OCR estimée (heuristique, pas une confiance du modèle) : "
+            f"{ocr_quality_score:.0%}."
+        )
+        if ocr_quality_score < 0.55:
+            st.warning(
+                "Qualité d'extraction faible : vérification manuelle du CV requise. "
+                "La décision automatique est désactivée pour ce candidat."
+            )
+    elif result.get("ocr_quality_method") == "unavailable":
+        st.warning(
+            "Qualité OCR indisponible : vérification manuelle du CV requise. "
+            "La décision automatique est désactivée pour ce candidat."
+        )
+
     if score:
         similarity_method = score.get("similarity_method", "bag_of_words")
         similarity_label = (

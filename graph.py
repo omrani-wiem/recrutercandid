@@ -11,7 +11,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 from state import PipelineState
-from nodes.ocr import ocr_node, needs_vlm_fallback
+from nodes.ocr import compute_quality_score, ocr_node, needs_vlm_fallback
 from nodes.extraction import extraction_node
 from nodes.jd_parsing import jd_parsing_node
 from nodes.skill_relevance import skill_relevance_node
@@ -84,7 +84,8 @@ def qwen_vlm_ocr_node(state: dict) -> dict:
     except Exception as exc:
         return {
             "extracted_text": "",
-            "ocr_confidence": 0.0,
+            "ocr_quality_score": None,
+            "ocr_quality_method": "unavailable",
             "ocr_method": "qwen_vlm_failed",
             "ocr_error": (
                 "L'OCR de secours (Qwen VLM) a échoué : "
@@ -93,9 +94,17 @@ def qwen_vlm_ocr_node(state: dict) -> dict:
             ),
         }
 
+    extracted_text = result["text"]
+    # Older MCP servers may still return a fixed or provider-reported "confidence".
+    # Never use that value as a calibrated OCR confidence; estimate quality locally.
+    quality_score = result.get("quality_score")
+    if not isinstance(quality_score, (int, float)):
+        quality_score = compute_quality_score(extracted_text)
+
     return {
-        "extracted_text": result["text"],
-        "ocr_confidence": result["confidence"],
+        "extracted_text": extracted_text,
+        "ocr_quality_score": float(quality_score),
+        "ocr_quality_method": "heuristic",
         "ocr_method": "qwen_vlm",
     }
 

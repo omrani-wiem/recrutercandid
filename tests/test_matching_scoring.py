@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 from nodes.matching_scoring import matching_scoring_node, routing_decision, REJECT_THRESHOLD
 import nodes.matching_scoring as scoring
@@ -49,6 +49,27 @@ class MatchingScoringTests(unittest.TestCase):
         self.assertFalse(any(flag["severity"] == "blocked" for flag in flags))
         self.assertLess(score.final_score, REJECT_THRESHOLD)
         self.assertEqual(routing_decision({"score": score}), "reject")
+
+    def test_similarity_uses_skills_and_not_education_or_identity_fields(self):
+        resume = ResumeProfile(
+            full_name="Candidate One",
+            email="one@example.com",
+            years_experience=4,
+            skills=["Python", "SQL"],
+            education=["Master, born 1988, woman, nationality: French"],
+            raw_sections={"identity": "Age: 38; gender: woman; religion: none"},
+        )
+        job = JobRequirements(
+            title="Data Engineer",
+            required_skills=["Python", "SQL"],
+            nice_to_have_skills=["Airflow"],
+            min_years_experience=3,
+        )
+
+        with patch.object(scoring, "_semantic_similarity", return_value=(0.8, "sentence_transformers")) as similarity:
+            matching_scoring_node({"resume": resume, "job": job})
+
+        similarity.assert_called_once_with("Python SQL", "Python SQL Airflow")
 
 
 if __name__ == "__main__":

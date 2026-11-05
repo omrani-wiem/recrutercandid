@@ -115,7 +115,7 @@ sont pas exécutées en parallèle.
 
 | Indicateur | Calcul et portée |
 |---|---|
-| Similarité de profil | Cosinus entre embeddings locaux produits par `paraphrase-multilingual-MiniLM-L12-v2` à partir des compétences/formation du CV et des compétences de l'offre. Si la bibliothèque ou le modèle est indisponible, repli journalisé vers Bag of Words ; la méthode est enregistrée dans le score. |
+| Similarité de profil | Cosinus entre embeddings locaux produits par `paraphrase-multilingual-MiniLM-L12-v2` à partir des compétences structurées du candidat et des compétences requises/souhaitées. Le nom, l'email, les études en texte libre et les sections brutes ne sont pas inclus dans ce calcul. Si la bibliothèque ou le modèle est indisponible, repli journalisé vers Bag of Words ; la méthode est enregistrée dans le score. |
 | Recouvrement de compétences | En priorité, jugement LLM sur les compétences requises. Si absent ou mal formé, comparaison de mots normalisés, avec quelques synonymes (par exemple `js`/`javascript`, `k8s`/`kubernetes`). Le ratio est basé sur les compétences requises. |
 | Expérience | Score entre 0 et 1 : 1 si le minimum est atteint ; en dessous, pénalité progressive `sqrt(années candidat / minimum)`. Si aucun minimum n'est défini, le score vaut 1. |
 | Filtres obligatoires | Actuellement, échec si une certification explicitement requise manque. L'expérience est volontairement une mesure graduelle, pas un filtre bloquant. |
@@ -129,11 +129,11 @@ sigmoïde recentrée, puis multiplie le résultat par 20. Le détail est exposé
 `score_breakdown`. Le score n'est donc pas une simple somme pondérée affichée telle
 quelle. À poids et entrées identiques, le résultat est déterministe.
 
-Le remplacement du Bag of Words par des embeddings modifie la distribution de la
-similarité ; les poids actuels et seuils 8/14 restent provisoires tant qu'ils ne sont
-pas mesurés sur des candidatures annotées par des recruteurs. Les tests de démonstration
-sur des CV/offres synthétiques contrôlent les cas typiques, mais ne constituent pas une
-calibration métier représentative.
+Le remplacement du Bag of Words par des embeddings et l'exclusion de l'éducation libre
+modifient la distribution de la similarité ; les poids actuels et seuils 8/14 restent
+provisoires tant qu'ils ne sont pas mesurés sur des candidatures annotées par des
+recruteurs. Les tests de démonstration sur des CV/offres synthétiques contrôlent les cas
+typiques, mais ne constituent pas une calibration métier représentative.
 
 ### Seuils de routage
 
@@ -144,6 +144,24 @@ calibration métier représentative.
 
 Une décision humaine de rejet déclenche toujours une seconde interruption, distincte,
 pour l'email. Un score élevé ne déclenche pas cette revue de rejet.
+
+### Contrôle contrefactuel des biais
+
+Le calcul du score utilise quatre features déclarées : similarité de compétences,
+recouvrement de compétences, adéquation de l'expérience et filtres de certifications.
+Le nom, l'email, l'âge, le genre et les sections brutes ne sont pas des features.
+L'éducation libre n'est plus utilisée dans la similarité. Le script
+`scripts/audit_scoring_bias.py` compare plusieurs profils synthétiques équivalents dont
+seules les informations personnelles changent, puis vérifie l'égalité des scores et
+des décisions ainsi que les taux de shortlist sur ces petits groupes artificiels.
+
+Ce contrôle est un test de cohérence contrefactuelle, **pas un audit statistique de
+l'équité**. L'expérience est maintenue constante dans chaque paire, mais peut servir de
+proxy de l'âge dans des données réelles ; de même, les compétences peuvent refléter des
+inégalités d'accès. Il faut encore mesurer les taux de sélection et les écarts sur un
+jeu de données représentatif, annoté avec des groupes protégés et validé selon les
+exigences légales et de confidentialité applicables. `nodes/guardrails.py` ne fait pas
+ce calcul statistique.
 
 ## 5. LLM, prompts et sécurité
 

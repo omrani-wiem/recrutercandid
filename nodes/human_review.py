@@ -13,6 +13,11 @@ from langgraph.types import interrupt
 
 
 def human_review_decision_node(state: dict) -> dict:
+    ocr_quality_score = state.get("ocr_quality_score")
+    low_ocr_quality = (
+        ocr_quality_score is None
+        or ocr_quality_score < 0.55
+    )
     payload = {
         "type": "decision_review",
         "resume_name": state["resume"].full_name,
@@ -20,6 +25,9 @@ def human_review_decision_node(state: dict) -> dict:
         "score": state["score"].model_dump(),
         "explanation": state.get("explanation", ""),
         "security_flags": state.get("security_flags", []),
+        "ocr_quality_score": ocr_quality_score,
+        "ocr_quality_method": state.get("ocr_quality_method"),
+        "ocr_manual_verification_required": low_ocr_quality,
         "action_required": "Choisir: 'shortlist' ou 'reject'",
     }
     human_decision = interrupt(payload)  # exécution suspendue ici jusqu'à reprise externe

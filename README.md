@@ -35,6 +35,14 @@ Transformers sur plusieurs CV/offres synthétiques, lancez ensuite
 au premier lancement et le script vérifie les similarités ainsi que les décisions
 retenue / revue humaine / rejet sur ces exemples.
 
+Pour vérifier l'invariance aux informations personnelles sur des paires synthétiques,
+lancez `python scripts/audit_scoring_bias.py`. Il compare les scores et décisions des
+mêmes profils de compétences avec âge, genre, nom, email et texte de formation différents.
+La similarité utilise uniquement les listes structurées de compétences du candidat et
+de l'offre : elle n'inclut ni nom, email, formation libre ni sections brutes du CV.
+Ce test contrefactuel n'est pas un audit statistique représentatif et ne détecte pas
+les effets indirects de variables comme les années d'expérience.
+
 **Avec une clé Mistral** : essayer l'application complète.
 
 ```bash
@@ -78,7 +86,7 @@ recrutercandid/
 │   ├── jd_parsing.py               # Offre -> JSON structuré (LLM single-shot)
 │   ├── skill_relevance.py          # Correspondance sémantique compétences (LLM, optionnel, contextualisé par domaine)
 │   ├── matching_scoring.py         # Similarité + filtres + scoring pondéré (fonction pure)
-│   ├── guardrails.py               # Biais / PII / cohérence (fonction + petit classifieur)
+│   ├── guardrails.py               # Signaux heuristiques PII + contrôle de structure du score
 │   ├── explanation.py              # Justification ancrée dans les faits extraits (LLM)
 │   ├── rejection_email.py          # Génère le brouillon de refus personnalisé (LLM), jamais auto-approuvé
 │   └── human_review.py             # Points d'interruption LangGraph (interrupt())

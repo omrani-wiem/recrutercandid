@@ -21,6 +21,7 @@ _embedding_runtime_failed = False
 # Entre les deux : zone grise -> revue humaine (human_review_decision).
 REJECT_THRESHOLD = 8.0
 SHORTLIST_THRESHOLD = 14.0
+MIN_OCR_QUALITY_FOR_AUTOMATIC_DECISION = 0.55
 
 
 @lru_cache(maxsize=1)
@@ -64,6 +65,11 @@ def _cosine_similarity(embeddings: np.ndarray) -> float:
 
     sim = float(np.dot(vec_a, vec_b) / (norm_a * norm_b))
     return max(0.0, min(1.0, sim))
+
+
+def _build_similarity_text(skills: list[str]) -> str:
+    """Build embedding input from competencies, excluding free-form profile text."""
+    return " ".join(skill.strip() for skill in skills if isinstance(skill, str) and skill.strip())
 
 
 def _semantic_similarity(text_a: str, text_b: str) -> tuple[float, str]:
@@ -240,12 +246,11 @@ def matching_scoring_node(state: dict) -> dict:
     resume, job = state["resume"], state["job"]
 
     resume_skills = getattr(resume, "skills", []) or []
-    resume_education = getattr(resume, "education", []) or []
     job_required_skills = getattr(job, "required_skills", []) or []
     job_nice_skills = getattr(job, "nice_to_have_skills", []) or []
 
-    resume_text = " ".join(resume_skills + resume_education)
-    job_text = " ".join(job_required_skills + job_nice_skills)
+    resume_text = _build_similarity_text(resume_skills)
+    job_text = _build_similarity_text(job_required_skills + job_nice_skills)
 
     semantic_similarity, similarity_method = _semantic_similarity(resume_text, job_text)
 
@@ -341,6 +346,13 @@ def routing_decision(state: dict) -> str:
     fallait tomber EXACTEMENT sur 13.0 pour déclencher une revue humaine.)
     """
     score = state["score"]
+    if "ocr_quality_score" in state:
+        quality_score = state["ocr_quality_score"]
+        if (
+            quality_score is None
+            or quality_score < MIN_OCR_QUALITY_FOR_AUTOMATIC_DECISION
+        ):
+            return "needs_human_review"
 
     if not score.hard_filters_passed:
         return "reject"

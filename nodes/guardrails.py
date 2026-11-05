@@ -1,7 +1,6 @@
 """
-Nœud FONCTION : vérifie que le score n'est pas corrélé à un attribut protégé, et que le
-profil ne contient plus d'information sensible avant de continuer dans le pipeline.
-Pas de LLM ici — des règles + un classifieur léger suffisent et sont plus auditables.
+Nœud FONCTION : signale quelques attributs protégés dans les sections brutes du profil
+et vérifie la structure du score. Ces contrôles ne mesurent pas la parité statistique.
 """
 from __future__ import annotations
 import re
@@ -27,10 +26,8 @@ def guardrails_node(state: dict) -> dict:
                 "reason": f"attribut potentiellement protégé détecté ({attr}) — exclu du scoring",
             })
 
-    # 2. Vérifie que le score n'a pas été influencé par un signal hors périmètre autorisé
-    #    (le scoring ne lit que semantic_similarity / skill_overlap_ratio / experience_match /
-    #    hard_filters_passed — ce check confirme qu'aucune feature non whitelistée n'a été
-    #    injectée en amont)
+    # 2. Vérifie que le score ne contient que les champs métier explicitement autorisés.
+    #    Ce contrôle structurel ne constitue pas un audit statistique des biais.
     allowed_features = {
         "semantic_similarity", "skill_overlap_ratio", "hard_filters_passed", "experience_match",
     }

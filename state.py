@@ -71,7 +71,8 @@ class PipelineState(TypedDict, total=False):
 
     # sorties OCR
     extracted_text: str
-    ocr_confidence: float
+    ocr_quality_score: Optional[float]
+    ocr_quality_method: Literal["heuristic", "unavailable"]
     ocr_method: Literal["native", "qwen_vlm", "qwen_vlm_failed"]
     ocr_error: Optional[str]
 

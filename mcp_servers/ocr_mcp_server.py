@@ -10,10 +10,15 @@ Isolé en serveur MCP séparé pour pouvoir :
 from __future__ import annotations
 import base64
 import os
+import sys
+from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 
 load_dotenv()
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from nodes.ocr import compute_quality_score
 
 mcp = FastMCP("ocr-vlm-server")
 
@@ -55,7 +60,8 @@ def extract_from_image(pdf_path: str) -> dict:
         pdf_path: chemin vers le fichier PDF (pages traitées comme images)
 
     Returns:
-        dict avec "text" (texte extrait, sections préservées) et "confidence" (0-1)
+        dict avec "text", un "quality_score" heuristique (0-1), et "quality_method".
+        Le modèle Qwen ne fournit pas de confiance OCR calibrée.
     """
     images = _pdf_pages_to_images(pdf_path)
 
@@ -76,7 +82,12 @@ def extract_from_image(pdf_path: str) -> dict:
         extracted_pages.append(page_text)
 
     full_text = "\n".join(extracted_pages)
-    return {"text": full_text, "confidence": 0.85, "method": "qwen_vlm"}
+    return {
+        "text": full_text,
+        "quality_score": compute_quality_score(full_text),
+        "quality_method": "heuristic",
+        "method": "qwen_vlm",
+    }
 
 
 def _call_qwen_vlm(image_b64: str, instruction: str) -> str:
