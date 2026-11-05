@@ -51,6 +51,7 @@ data/
 !samples/example_offer.txt
 
 # Avis recruteur (contient des noms de candidats, ne doit pas être commité)
+feedback_calibration/feedback_log.jsonl
 rl/feedback_log.jsonl
 
 # MCP / local tool artifacts

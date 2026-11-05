@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import logging
 import re
 from collections import Counter
+from functools import lru_cache
 import numpy as np
 
 from state import MatchScore
-from rl.scoring_model import ScoringModel
+from feedback_calibration.scoring_model import ScoringModel
+
+logger = logging.getLogger(__name__)
 
 _scoring_model = ScoringModel.load_latest()
+EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
+_embedding_runtime_failed = False
 
 # Seuils de routage, exprimés sur l'échelle finale /20 (cf. routing_decision).
 # Un score STRICTEMENT au-dessus de SHORTLIST_THRESHOLD passe en shortlist direct.
@@ -17,10 +23,24 @@ REJECT_THRESHOLD = 8.0
 SHORTLIST_THRESHOLD = 14.0
 
 
-def _embed(texts: list[str]) -> np.ndarray:
-    """
-    Embeddings locaux très simples basés sur un bag-of-words.
-    """
+@lru_cache(maxsize=1)
+def _load_embedding_model():
+    """Load the multilingual sentence model once, on first use."""
+    try:
+        from sentence_transformers import SentenceTransformer
+
+        return SentenceTransformer(EMBEDDING_MODEL_NAME)
+    except Exception:
+        logger.warning(
+            "Could not load sentence-transformers model %s; using Bag of Words fallback.",
+            EMBEDDING_MODEL_NAME,
+            exc_info=True,
+        )
+        return None
+
+
+def _embed_bag_of_words(texts: list[str]) -> np.ndarray:
+    """Build local Bag of Words vectors when the embedding model is unavailable."""
     tokenized = [re.findall(r"[a-z0-9]+", text.lower()) for text in texts]
     vocab = sorted({token for tokens in tokenized for token in tokens})
 
@@ -33,11 +53,7 @@ def _embed(texts: list[str]) -> np.ndarray:
     return np.array(vectors)
 
 
-def _semantic_similarity(text_a: str, text_b: str) -> float:
-    """
-    Similarité cosinus normalisée sur [0, 1].
-    """
-    embeddings = _embed([text_a, text_b])
+def _cosine_similarity(embeddings: np.ndarray) -> float:
     vec_a, vec_b = embeddings[0], embeddings[1]
 
     norm_a = np.linalg.norm(vec_a)
@@ -48,6 +64,35 @@ def _semantic_similarity(text_a: str, text_b: str) -> float:
 
     sim = float(np.dot(vec_a, vec_b) / (norm_a * norm_b))
     return max(0.0, min(1.0, sim))
+
+
+def _semantic_similarity(text_a: str, text_b: str) -> tuple[float, str]:
+    """Return cosine similarity and the method used to calculate it."""
+    global _embedding_runtime_failed
+
+    if not text_a.strip() or not text_b.strip():
+        embeddings = _embed_bag_of_words([text_a, text_b])
+        return _cosine_similarity(embeddings), "bag_of_words"
+
+    model = None if _embedding_runtime_failed else _load_embedding_model()
+    if model is not None:
+        try:
+            embeddings = model.encode(
+                [text_a, text_b],
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
+            return _cosine_similarity(np.asarray(embeddings, dtype=float)), "sentence_transformers"
+        except Exception:
+            _embedding_runtime_failed = True
+            logger.warning(
+                "Sentence-transformers inference failed; using Bag of Words fallback.",
+                exc_info=True,
+            )
+
+    embeddings = _embed_bag_of_words([text_a, text_b])
+    return _cosine_similarity(embeddings), "bag_of_words"
 
 
 def _skill_overlap_from_judgment(
@@ -202,7 +247,7 @@ def matching_scoring_node(state: dict) -> dict:
     resume_text = " ".join(resume_skills + resume_education)
     job_text = " ".join(job_required_skills + job_nice_skills)
 
-    semantic_similarity = _semantic_similarity(resume_text, job_text)
+    semantic_similarity, similarity_method = _semantic_similarity(resume_text, job_text)
 
     overlap_from_judgment = _skill_overlap_from_judgment(
         state.get("skill_relevance_judgment"),
@@ -276,6 +321,7 @@ def matching_scoring_node(state: dict) -> dict:
         matched_skills=matched_skills,
         missing_skills=missing_skills,
         skill_matching_method=skill_matching_method,
+        similarity_method=similarity_method,
         score_breakdown=score_breakdown,
     )
 

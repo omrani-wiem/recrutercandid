@@ -1,8 +1,8 @@
 from __future__ import annotations
 import json
-import numpy as np
 from pathlib import Path
 from dataclasses import dataclass, field
+import numpy as np
 
 FEATURE_ORDER = [
     "semantic_similarity",
@@ -12,6 +12,7 @@ FEATURE_ORDER = [
 ]
 
 MODEL_PATH = Path(__file__).parent / "weights.json"
+LEGACY_MODEL_PATH = Path(__file__).resolve().parent.parent / "rl" / "weights.json"
 
 
 @dataclass
@@ -42,8 +43,9 @@ class ScoringModel:
         """
         default_weights = cls().weights.copy()
 
-        if MODEL_PATH.exists():
-            loaded = json.loads(MODEL_PATH.read_text())
+        model_path = MODEL_PATH if MODEL_PATH.exists() else LEGACY_MODEL_PATH
+        if model_path.exists():
+            loaded = json.loads(model_path.read_text(encoding="utf-8"))
 
             # On fusionne les poids chargés dans les poids par défaut
             # pour garantir la présence des nouvelles features.
@@ -57,29 +59,30 @@ class ScoringModel:
         return cls(weights=default_weights)
 
     def save(self):
-        MODEL_PATH.write_text(json.dumps(self.weights, indent=2))
+        MODEL_PATH.write_text(json.dumps(self.weights, indent=2), encoding="utf-8")
 
 
-def offline_update(feedback_log: list[dict], learning_rate: float = 0.01) -> ScoringModel:
-    """
-    feedback_log: [{"features": {...}, "reward": float}, ...]
-
-    Descente de gradient très simple sur une perte quadratique.
-    Pour le MVP, on garde un modèle lisible/auditable.
-    """
+def calibrate_scoring_weights(
+    feedback_log: list[dict], learning_rate: float = 0.01
+) -> ScoringModel:
+    """Adjust the scoring weights offline using recruiter feedback labels."""
     if not feedback_log:
         return ScoringModel.load_latest()
 
     model = ScoringModel.load_latest()
 
-    rewards = np.array([e["reward"] for e in feedback_log], dtype=float)
+    feedback_values = np.array([
+        e.get("feedback_label", e.get("reward")) for e in feedback_log
+    ], dtype=float)
 
-    if rewards.max() == rewards.min():
-        reward_norm = np.ones_like(rewards) * 0.5
+    if feedback_values.max() == feedback_values.min():
+        feedback_targets = np.ones_like(feedback_values) * 0.5
     else:
-        reward_norm = (rewards - rewards.min()) / (rewards.max() - rewards.min() + 1e-8)
+        feedback_targets = (
+            feedback_values - feedback_values.min()
+        ) / (feedback_values.max() - feedback_values.min() + 1e-8)
 
-    for entry, target in zip(feedback_log, reward_norm):
+    for entry, target in zip(feedback_log, feedback_targets):
         features = entry.get("features", {})
         pred = model.predict(features)
         error = target - pred

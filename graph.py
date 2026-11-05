@@ -5,6 +5,7 @@ humaine explicite.
 """
 from __future__ import annotations
 import argparse
+import json
 from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
@@ -29,6 +30,29 @@ def _build_resend_headers(api_key: str) -> dict:
     }
 
 
+def _mcp_result_payload(result) -> dict:
+    if result.isError:
+        details = " ".join(
+            item.text for item in result.content if getattr(item, "type", None) == "text"
+        )
+        raise RuntimeError(details or "Le serveur MCP a signalé une erreur.")
+
+    if isinstance(result.structuredContent, dict):
+        return result.structuredContent
+
+    for item in result.content:
+        if getattr(item, "type", None) != "text":
+            continue
+        try:
+            payload = json.loads(item.text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+
+    raise RuntimeError("Le serveur MCP OCR n'a pas renvoyé de résultat structuré.")
+
+
 def qwen_vlm_ocr_node(state: dict) -> dict:
     """
     Appelle le serveur MCP OCR (client MCP standard, transport stdio).
@@ -49,8 +73,10 @@ def qwen_vlm_ocr_node(state: dict) -> dict:
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                result = await session.call_tool("extract_from_image", {"pdf_path": state["cv_path"]})
-                return result
+                tool_result = await session.call_tool(
+                    "extract_from_image", {"pdf_path": state["cv_path"]}
+                )
+                return _mcp_result_payload(tool_result)
 
     import asyncio
     try:

@@ -1,7 +1,6 @@
 """
-Génère un brouillon d'e-mail de refus. Ce nœud ne fait QUE générer le texte — il n'a aucun
-accès à l'outil d'envoi. L'envoi réel se fait exclusivement via mcp_servers/email_mcp_server.py,
-appelé depuis graph.py APRÈS le passage par le nœud d'interruption human_review_email.
+Génère un brouillon d'e-mail de refus sans l'envoyer. L'envoi passe par l'intégration Resend
+de graph.py uniquement après approbation via le nœud d'interruption human_review_email.
 """
 from __future__ import annotations
 import json

@@ -8,6 +8,7 @@ pydantic>=2.0
 # LLM et outils MCP
 mistralai>=1.0
 mcp>=1.0
+sentence-transformers>=3.0
 
 # Extraction PDF (native + fallback OCR côté serveur MCP)
 pdfplumber>=0.11

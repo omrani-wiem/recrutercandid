@@ -51,6 +51,7 @@ class MatchScore(BaseModel):
     # "llm_assisted" -> un LLM a jugé qu'une compétence concrète du candidat satisfait une
     #                   exigence formulée de façon générale (voir nodes/skill_relevance.py)
     skill_matching_method: Literal["keyword", "llm_assisted"] = "keyword"
+    similarity_method: Literal["sentence_transformers", "bag_of_words"] = "bag_of_words"
 
     # breakdown exploitable par l'UI
     score_breakdown: dict[str, float] = Field(default_factory=dict)

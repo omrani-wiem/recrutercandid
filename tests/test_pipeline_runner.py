@@ -41,8 +41,10 @@ class PipelineRunnerTests(unittest.TestCase):
     def _build_patched_graph(self, resume, job):
         """Construit le graphe avec tous les nœuds LLM remplacés par des versions factices."""
         import graph as graph_module
+        import nodes.matching_scoring as scoring_module
 
         patches = [
+            patch.object(scoring_module, "_load_embedding_model", return_value=None),
             patch.object(graph_module, "ocr_node", _fake_ocr_node),
             patch.object(graph_module, "extraction_node", _make_extraction_node(resume)),
             patch.object(graph_module, "jd_parsing_node", _make_jd_parsing_node(job)),

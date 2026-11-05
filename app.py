@@ -16,8 +16,8 @@ from pipeline_runner import (
     STATUS_REJECTED_EMAIL_SENT, STATUS_REJECTED_EMAIL_CANCELLED,
     STATUS_REJECTED_EMAIL_FAILED, STATUS_ERROR,
 )
-from rl.feedback_store import append_feedback, load_feedback_log, clear_feedback_log
-from rl.scoring_model import offline_update
+from feedback_calibration.feedback_store import append_feedback, load_feedback_log, clear_feedback_log
+from feedback_calibration.scoring_model import calibrate_scoring_weights
 
 import auth
 from job_search import search_jobs_abroad, ADZUNA_COUNTRIES
@@ -161,10 +161,10 @@ with st.sidebar:
          st.rerun()
 
      st.divider()
-     st.header("Amélioration du score")
+     st.header("Recalibrage du score par feedback")
      st.caption(
          "Chaque avis 👍/👎 donné sur un candidat est mis de côté ici. Cliquez pour que "
-         "l'outil en tienne compte pour les prochaines évaluations."
+         "l'outil ajuste les poids du score pour les prochaines évaluations."
      )
      pending_feedback = load_feedback_log()
      st.caption(f"{len(pending_feedback)} avis en attente de prise en compte.")
@@ -172,7 +172,7 @@ with st.sidebar:
          if not pending_feedback:
              st.warning("Aucun avis pour l'instant.")
          else:
-             offline_update(pending_feedback)
+             calibrate_scoring_weights(pending_feedback)
              clear_feedback_log()
              st.success(f"{len(pending_feedback)} avis pris en compte.")
 
@@ -382,6 +382,14 @@ def render_candidate_detail():
         )
 
     if score:
+        similarity_method = score.get("similarity_method", "bag_of_words")
+        similarity_label = (
+            "Sentence Transformers (paraphrase-multilingual-MiniLM-L12-v2)"
+            if similarity_method == "sentence_transformers"
+            else "Bag of Words (repli)"
+        )
+        st.caption(f"Similarité de profil calculée avec : {similarity_label}.")
+
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Score de compatibilité", f"{score['final_score']} / 20")
         col2.metric(
@@ -484,7 +492,7 @@ def render_candidate_detail():
         if mark_good or mark_bad:
             append_feedback(
                 features=score["score_breakdown"],
-                reward=1.0 if mark_good else 0.0,
+                feedback_label=1.0 if mark_good else 0.0,
                 candidate_name=candidate_display_name(candidate, job["id"]),
                 job_title=job["title"],
             )

@@ -29,6 +29,12 @@ pip install -r requirements.txt
 MISTRAL_API_KEY=placeholder python -m unittest discover -s tests -v
 ```
 
+Le test des fonctions n'accède pas au réseau. Pour évaluer réellement Sentence
+Transformers sur plusieurs CV/offres synthétiques, lancez ensuite
+`python scripts/evaluate_embedding_similarity.py` : le modèle multilingue est téléchargé
+au premier lancement et le script vérifie les similarités ainsi que les décisions
+retenue / revue humaine / rejet sur ces exemples.
+
 **Avec une clé Mistral** : essayer l'application complète.
 
 ```bash
@@ -78,10 +84,10 @@ recrutercandid/
 │   └── human_review.py             # Points d'interruption LangGraph (interrupt())
 ├── mcp_servers/
 │   ├── ocr_mcp_server.py           # Outil MCP : OCR Qwen VLM
-│   └── email_mcp_server.py         # Outil MCP : envoi d'e-mail (seul point de sortie réel)
-├── rl/
-│   ├── scoring_model.py            # Bandit contextuel : poids appris à partir du feedback recruteur
-│   └── feedback_store.py           # Journal des avis recruteur (👍/👎) en attente de prise en compte
+├── feedback_calibration/
+│   ├── scoring_model.py            # Recalibrage hors ligne des poids à partir des avis recruteur
+│   ├── feedback_store.py           # Journal des avis recruteur (👍/👎) en attente de prise en compte
+│   └── weights.json                # Poids actuellement utilisés
 └── data/                           # Créé automatiquement au premier lancement (jobs.json, candidates.json, cv_files/)
 ```
 
@@ -201,6 +207,15 @@ entièrement déterministe et auditable** : à poids et données égales, il don
 le même résultat — un choix volontaire pour un outil de recrutement (traçabilité,
 explicabilité en cas de contestation).
 
+La similarité de profil utilise le modèle local multilingue
+`paraphrase-multilingual-MiniLM-L12-v2` de Sentence Transformers, adapté notamment aux
+textes français. Au premier usage, le modèle doit être téléchargé et chargé localement.
+Si sa bibliothèque, son modèle ou son inférence sont indisponibles, le système journalise
+l'erreur et retombe sur une similarité Bag of Words ; la méthode employée est indiquée
+dans le détail du candidat. Les poids et seuils doivent être validés sur un jeu de
+candidatures annotées avant un usage réel : le remplacement des vecteurs change la
+distribution des similarités.
+
 ### D'où vient le premier ingrédient (compétences en commun) ?
 
 Comparer des compétences mot pour mot est fragile : une offre qui dit "compétences en
@@ -220,9 +235,11 @@ utilisée pour ce candidat.
 
 **Ce calcul ne s'améliore pas tout seul avec l'usage.** Dans l'interface Streamlit,
 chaque candidat peut recevoir un avis du recruteur (👍/👎). Ces avis sont mis de côté
-(`rl/feedback_log.jsonl`) et ne sont pris en compte qu'après avoir cliqué sur
-« Tenir compte de mes avis » dans le menu de gauche, ce qui ajuste légèrement les
-poids ci-dessus (`offline_update` dans `rl/scoring_model.py`). Un ou deux avis isolés
+(`feedback_calibration/feedback_log.jsonl`) et ne sont pris en compte qu'après avoir
+cliqué sur « Tenir compte de mes avis » dans le menu de gauche, ce qui ajuste légèrement
+les poids ci-dessus (`calibrate_scoring_weights` dans
+`feedback_calibration/scoring_model.py`). C'est un ajustement hors ligne simple des poids
+à partir des avis recruteur. Un ou deux avis isolés
 ne changent presque rien au score affiché — c'est volontaire, pour éviter qu'un avis
 isolé ne déforme le calcul ; il faut accumuler plusieurs dizaines d'avis pour voir une
 vraie différence.

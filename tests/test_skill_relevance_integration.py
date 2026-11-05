@@ -1,5 +1,7 @@
 import unittest
+from unittest.mock import patch
 
+import nodes.matching_scoring as scoring
 from nodes.matching_scoring import matching_scoring_node
 from state import JobRequirements, ResumeProfile
 
@@ -12,6 +14,10 @@ class SkillRelevanceIntegrationTests(unittest.TestCase):
     """
 
     def setUp(self):
+        patcher = patch.object(scoring, "_load_embedding_model", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
         self.resume = ResumeProfile(
             full_name="Jean Dupont",
             years_experience=6,

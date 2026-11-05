@@ -1,10 +1,18 @@
 import unittest
+from unittest.mock import patch
 
 from nodes.matching_scoring import matching_scoring_node, routing_decision, REJECT_THRESHOLD
+import nodes.matching_scoring as scoring
+from nodes.guardrails import guardrails_node
 from state import JobRequirements, ResumeProfile
 
 
 class MatchingScoringTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(scoring, "_load_embedding_model", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_unrelated_resume_scores_low_and_is_rejected(self):
         """
         Un profil totalement hors sujet (médecin candidatant à un poste de dev) doit
@@ -36,6 +44,9 @@ class MatchingScoringTests(unittest.TestCase):
         result = matching_scoring_node({"resume": resume, "job": job})
         score = result["score"]
 
+        self.assertEqual(score.similarity_method, "bag_of_words")
+        flags = guardrails_node({"resume": resume, "score": score})["security_flags"]
+        self.assertFalse(any(flag["severity"] == "blocked" for flag in flags))
         self.assertLess(score.final_score, REJECT_THRESHOLD)
         self.assertEqual(routing_decision({"score": score}), "reject")
 
