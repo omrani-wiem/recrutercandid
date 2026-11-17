@@ -9,7 +9,9 @@ try:
 except ImportError:
     from mistralai import Mistral
 
-from security.prompt_injection_guard import pre_llm_hook, post_llm_hook, escalate_if_unsafe
+from security.prompt_injection_guard import (
+    pre_llm_hook, post_llm_hook, escalate_if_unsafe, raise_if_unsafe,
+)
 from prompts.system_prompts import (
     JD_PARSING_SYSTEM_PROMPT,
     JD_PARSING_FEWSHOT,
@@ -45,6 +47,7 @@ def jd_parsing_node(state: dict) -> dict:
         node_name="jd_parsing",
     )
     escalate_if_unsafe(guard, "jd_parsing", security_flags)
+    raise_if_unsafe(guard, "jd_parsing")
 
     messages = build_messages(JD_PARSING_SYSTEM_PROMPT, JD_PARSING_FEWSHOT, guard.sanitized_text)
 
@@ -60,6 +63,7 @@ def jd_parsing_node(state: dict) -> dict:
     output_text = extract_json_payload(output_text)
     post_guard = post_llm_hook(output_text, expected_schema_keys=["title", "required_skills"])
     escalate_if_unsafe(post_guard, "jd_parsing_output", security_flags)
+    raise_if_unsafe(post_guard, "jd_parsing_output")
 
     payload = json.loads(output_text)
     normalized_payload = _normalize_job_payload(payload)

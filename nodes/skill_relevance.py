@@ -19,7 +19,10 @@ try:
 except ImportError:
     from mistralai import Mistral
 
-from security.prompt_injection_guard import pre_llm_hook, post_llm_hook, escalate_if_unsafe
+from security.prompt_injection_guard import (
+    UnsafeLLMContentError, pre_llm_hook, post_llm_hook, escalate_if_unsafe,
+    raise_if_unsafe,
+)
 from prompts.system_prompts import (
     SKILL_RELEVANCE_SYSTEM_PROMPT,
     SKILL_RELEVANCE_FEWSHOT,
@@ -71,6 +74,7 @@ def skill_relevance_node(state: dict) -> dict:
         node_name="skill_relevance",
     )
     escalate_if_unsafe(guard, "skill_relevance", security_flags)
+    raise_if_unsafe(guard, "skill_relevance")
 
     messages = build_messages(SKILL_RELEVANCE_SYSTEM_PROMPT, SKILL_RELEVANCE_FEWSHOT, guard.sanitized_text)
 
@@ -88,8 +92,11 @@ def skill_relevance_node(state: dict) -> dict:
 
         post_guard = post_llm_hook(output_text, expected_schema_keys=["matched_required", "missing_required"])
         escalate_if_unsafe(post_guard, "skill_relevance_output", security_flags)
+        raise_if_unsafe(post_guard, "skill_relevance_output")
 
         judgment = json.loads(output_text)
+    except UnsafeLLMContentError:
+        raise
     except Exception:
         # Échec silencieux et non bloquant : le calcul du score retombe sur la
         # correspondance mot-à-mot classique (voir matching_scoring._skill_overlap).

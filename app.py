@@ -16,14 +16,15 @@ from pipeline_runner import (
     STATUS_REJECTED_EMAIL_SENT, STATUS_REJECTED_EMAIL_CANCELLED,
     STATUS_REJECTED_EMAIL_FAILED, STATUS_ERROR,
 )
-from feedback_calibration.feedback_store import append_feedback, load_feedback_log, clear_feedback_log
-from feedback_calibration.scoring_model import calibrate_scoring_weights
+from rl.feedback_store import append_feedback, load_feedback_log, clear_feedback_log
+from rl.scoring_model import offline_update
 
 import auth
 from job_search import search_jobs_abroad, ADZUNA_COUNTRIES
 
 from cv_advisor import generate_cv_improvement_report
 from nodes.ocr import extract_native_text
+from nodes.matching_scoring import rank_similar_profiles
 
 
 load_dotenv()
@@ -161,10 +162,10 @@ with st.sidebar:
          st.rerun()
 
      st.divider()
-     st.header("Recalibrage du score par feedback")
+     st.header("Amélioration du score")
      st.caption(
          "Chaque avis 👍/👎 donné sur un candidat est mis de côté ici. Cliquez pour que "
-         "l'outil ajuste les poids du score pour les prochaines évaluations."
+         "l'outil en tienne compte pour les prochaines évaluations."
      )
      pending_feedback = load_feedback_log()
      st.caption(f"{len(pending_feedback)} avis en attente de prise en compte.")
@@ -172,7 +173,7 @@ with st.sidebar:
          if not pending_feedback:
              st.warning("Aucun avis pour l'instant.")
          else:
-             calibrate_scoring_weights(pending_feedback)
+             offline_update(pending_feedback)
              clear_feedback_log()
              st.success(f"{len(pending_feedback)} avis pris en compte.")
 
@@ -381,32 +382,7 @@ def render_candidate_detail():
             "fichier scanné). Vérifiez son contenu manuellement avant de vous fier au score."
         )
 
-    ocr_quality_score = result.get("ocr_quality_score")
-    if ocr_quality_score is not None:
-        st.caption(
-            "Qualité OCR estimée (heuristique, pas une confiance du modèle) : "
-            f"{ocr_quality_score:.0%}."
-        )
-        if ocr_quality_score < 0.55:
-            st.warning(
-                "Qualité d'extraction faible : vérification manuelle du CV requise. "
-                "La décision automatique est désactivée pour ce candidat."
-            )
-    elif result.get("ocr_quality_method") == "unavailable":
-        st.warning(
-            "Qualité OCR indisponible : vérification manuelle du CV requise. "
-            "La décision automatique est désactivée pour ce candidat."
-        )
-
     if score:
-        similarity_method = score.get("similarity_method", "bag_of_words")
-        similarity_label = (
-            "Sentence Transformers (paraphrase-multilingual-MiniLM-L12-v2)"
-            if similarity_method == "sentence_transformers"
-            else "Bag of Words (repli)"
-        )
-        st.caption(f"Similarité de profil calculée avec : {similarity_label}.")
-
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Score de compatibilité", f"{score['final_score']} / 20")
         col2.metric(
@@ -423,6 +399,13 @@ def render_candidate_detail():
             "Suffisante" if score["candidate_years_experience"] >= score["required_years_experience"] else "Insuffisante",
         )
         col4.metric("Conditions obligatoires", "Respectées" if score["hard_filters_passed"] else "Non respectées")
+
+        similarity_method = {
+            "sentence_transformers": "Sentence Transformers",
+            "bag_of_words": "Bag of Words (repli)",
+        }.get(score.get("similarity_method"))
+        if similarity_method:
+            st.caption(f"Similarité sémantique calculée avec : {similarity_method}.")
 
         if (
             score.get("skill_matching_method") == "keyword"
@@ -455,6 +438,57 @@ def render_candidate_detail():
             st.subheader("Offre")
             st.write(f"**Poste :** {job['title']}")
             st.write(f"**Lieu :** {job.get('location') or 'Non renseigné'}")
+
+    if resume and resume.get("skills"):
+        with st.expander("Trouver des profils similaires pour cette offre"):
+            st.caption(
+                "Comparaison des compétences avec les autres candidats à la même offre. "
+                "Cette proximité est une aide à la comparaison, pas une recommandation "
+                "automatique de recrutement."
+            )
+            similar_candidates = []
+            candidate_by_id = {}
+            for other_candidate in data_store.candidates_for_job(job["id"]):
+                if other_candidate["id"] == candidate_id:
+                    continue
+                other_result = other_candidate.get("results", {}).get(job["id"])
+                other_resume = (other_result or {}).get("resume") or {}
+                other_skills = other_resume.get("skills") or []
+                if not other_skills:
+                    continue
+                similar_candidates.append((other_candidate["id"], other_skills))
+                candidate_by_id[other_candidate["id"]] = (other_candidate, other_result)
+
+            if not similar_candidates:
+                st.info("Aucun autre profil analysé avec des compétences disponibles pour cette offre.")
+            else:
+                ranked_profiles, method = rank_similar_profiles(
+                    resume["skills"],
+                    similar_candidates,
+                )
+                method_label = (
+                    "Sentence Transformers"
+                    if method == "sentence_transformers"
+                    else "Bag of Words (repli)"
+                )
+                st.caption(f"Méthode de similarité : {method_label}.")
+                for rank, (similar_id, similarity) in enumerate(ranked_profiles[:5], start=1):
+                    similar_candidate, similar_result = candidate_by_id[similar_id]
+                    name = candidate_display_name(similar_candidate, job["id"])
+                    similar_score = (similar_result.get("score") or {}).get("final_score")
+                    status_text = STATUS_LABELS.get(
+                        similar_result.get("status"), ("Non évalué", "off")
+                    )[0].strip()
+                    left, right = st.columns([3, 1])
+                    score_text = (
+                        f" · Score : {similar_score}/20" if similar_score is not None else ""
+                    )
+                    left.write(
+                        f"**#{rank} {name}** — proximité {similarity:.0%}"
+                        f" · {status_text}{score_text}"
+                    )
+                    if right.button("Voir le profil", key=f"similar_{candidate_id}_{similar_id}"):
+                        go("candidate_detail", selected_candidate_id=similar_id)
 
     st.divider()
 
@@ -509,7 +543,7 @@ def render_candidate_detail():
         if mark_good or mark_bad:
             append_feedback(
                 features=score["score_breakdown"],
-                feedback_label=1.0 if mark_good else 0.0,
+                reward=1.0 if mark_good else 0.0,
                 candidate_name=candidate_display_name(candidate, job["id"]),
                 job_title=job["title"],
             )

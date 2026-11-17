@@ -15,6 +15,9 @@ except ImportError:
 from prompts.system_prompts import (
     REJECTION_EMAIL_SYSTEM_PROMPT, REJECTION_EMAIL_FEWSHOT, build_messages, extract_json_payload
 )
+from security.prompt_injection_guard import (
+    pre_llm_hook, post_llm_hook, raise_if_unsafe,
+)
 
 load_dotenv()
 client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
@@ -41,8 +44,7 @@ def _parse_email_draft(raw_text: str) -> dict:
 def rejection_email_node(state: dict) -> dict:
     resume, job, score = state["resume"], state["job"], state["score"]
 
-    # entrée déjà structurée (pas de texte brut candidat) -> pas de sandwiching nécessaire ici,
-    # mais on garde le principe : seules les données validées/structurées alimentent ce nœud
+    # Structured fields can still contain text originating from untrusted documents.
     context = (
         f"Candidat: {resume.full_name}, poste: {job.title}. "
         f"Compétences déjà maîtrisées par le candidat: {resume.skills or 'non renseignées'}. "
@@ -51,8 +53,16 @@ def rejection_email_node(state: dict) -> dict:
         f"Expérience du candidat: {resume.years_experience} ans "
         f"(minimum requis: {job.min_years_experience} ans)."
     )
+    guard = pre_llm_hook(
+        context,
+        "Rédige un brouillon d'email de refus factuel à partir des données fournies.",
+        "rejection_email",
+    )
+    raise_if_unsafe(guard, "rejection_email")
 
-    messages = build_messages(REJECTION_EMAIL_SYSTEM_PROMPT, REJECTION_EMAIL_FEWSHOT, context)
+    messages = build_messages(
+        REJECTION_EMAIL_SYSTEM_PROMPT, REJECTION_EMAIL_FEWSHOT, guard.sanitized_text
+    )
 
     response = client.chat.complete(
         model=MODEL_NAME,
@@ -64,7 +74,9 @@ def rejection_email_node(state: dict) -> dict:
     draft_text = response.choices[0].message.content
     if not isinstance(draft_text, str):
         draft_text = str(draft_text)
-    draft = _parse_email_draft(draft_text)
+    post_guard = post_llm_hook(draft_text)
+    raise_if_unsafe(post_guard, "rejection_email_output")
+    draft = _parse_email_draft(post_guard.sanitized_text)
     # IMPORTANT : rejection_email_approved reste TOUJOURS False ici. Il y avait
     # auparavant une auto-approbation (`bool(resume.email and os.getenv("RESEND_API_KEY"))`)
     # qui envoyait le mail automatiquement dès qu'un email candidat était détecté et

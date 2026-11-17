@@ -17,9 +17,9 @@ def extract_native_text(cv_path: str) -> str:
     return "\n".join(text_parts)
 
 
-def compute_quality_score(text: str) -> float:
+def compute_confidence(text: str) -> float:
     """
-    Estimation heuristique de qualité du texte OCR, et non confiance du modèle :
+    Score heuristique simple, pas besoin de LLM :
     - longueur du texte extrait
     - ratio de caractères imprimables / total
     - présence de sections attendues d'un CV
@@ -44,13 +44,12 @@ def compute_quality_score(text: str) -> float:
 
 
 def ocr_node(state: dict) -> dict:
-    """Nœud LangGraph : extrait le texte natif et estime sa qualité heuristique."""
+    """Nœud LangGraph : tente l'extraction native, calcule la confiance."""
     text = extract_native_text(state["cv_path"])
-    quality_score = compute_quality_score(text)
+    confidence = compute_confidence(text)
     return {
         "extracted_text": text,
-        "ocr_quality_score": quality_score,
-        "ocr_quality_method": "heuristic",
+        "ocr_confidence": confidence,
         "ocr_method": "native",
     }
 
@@ -58,6 +57,6 @@ def ocr_node(state: dict) -> dict:
 def needs_vlm_fallback(state: dict) -> str:
     """Fonction de branchement conditionnel LangGraph (add_conditional_edges)."""
     threshold = 0.55
-    if (state.get("ocr_quality_score") or 0) < threshold:
+    if state.get("ocr_confidence", 0) < threshold:
         return "qwen_vlm_ocr"
     return "extraction"

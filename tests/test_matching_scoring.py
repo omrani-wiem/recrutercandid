@@ -48,7 +48,10 @@ class MatchingScoringTests(unittest.TestCase):
         flags = guardrails_node({"resume": resume, "score": score})["security_flags"]
         self.assertFalse(any(flag["severity"] == "blocked" for flag in flags))
         self.assertLess(score.final_score, REJECT_THRESHOLD)
-        self.assertEqual(routing_decision({"score": score}), "reject")
+        self.assertEqual(
+            routing_decision({"score": score, "ocr_quality_score": 0.8}),
+            "reject",
+        )
 
     def test_similarity_uses_skills_and_not_education_or_identity_fields(self):
         resume = ResumeProfile(

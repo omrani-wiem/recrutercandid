@@ -4,10 +4,11 @@ import logging
 import re
 from collections import Counter
 from functools import lru_cache
+
 import numpy as np
 
 from state import MatchScore
-from feedback_calibration.scoring_model import ScoringModel
+from rl.scoring_model import ScoringModel
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,11 @@ _embedding_runtime_failed = False
 # Entre les deux : zone grise -> revue humaine (human_review_decision).
 REJECT_THRESHOLD = 8.0
 SHORTLIST_THRESHOLD = 14.0
-MIN_OCR_QUALITY_FOR_AUTOMATIC_DECISION = 0.55
 
 
 @lru_cache(maxsize=1)
 def _load_embedding_model():
-    """Load the multilingual sentence model once, on first use."""
+    """Load the multilingual sentence embedding model once, on first use."""
     try:
         from sentence_transformers import SentenceTransformer
 
@@ -41,7 +41,7 @@ def _load_embedding_model():
 
 
 def _embed_bag_of_words(texts: list[str]) -> np.ndarray:
-    """Build local Bag of Words vectors when the embedding model is unavailable."""
+    """Create Bag of Words vectors as a fallback if embeddings are unavailable."""
     tokenized = [re.findall(r"[a-z0-9]+", text.lower()) for text in texts]
     vocab = sorted({token for tokens in tokenized for token in tokens})
 
@@ -67,18 +67,12 @@ def _cosine_similarity(embeddings: np.ndarray) -> float:
     return max(0.0, min(1.0, sim))
 
 
-def _build_similarity_text(skills: list[str]) -> str:
-    """Build embedding input from competencies, excluding free-form profile text."""
-    return " ".join(skill.strip() for skill in skills if isinstance(skill, str) and skill.strip())
-
-
 def _semantic_similarity(text_a: str, text_b: str) -> tuple[float, str]:
     """Return cosine similarity and the method used to calculate it."""
     global _embedding_runtime_failed
 
     if not text_a.strip() or not text_b.strip():
-        embeddings = _embed_bag_of_words([text_a, text_b])
-        return _cosine_similarity(embeddings), "bag_of_words"
+        return _cosine_similarity(_embed_bag_of_words([text_a, text_b])), "bag_of_words"
 
     model = None if _embedding_runtime_failed else _load_embedding_model()
     if model is not None:
@@ -97,8 +91,85 @@ def _semantic_similarity(text_a: str, text_b: str) -> tuple[float, str]:
                 exc_info=True,
             )
 
-    embeddings = _embed_bag_of_words([text_a, text_b])
-    return _cosine_similarity(embeddings), "bag_of_words"
+    return _cosine_similarity(_embed_bag_of_words([text_a, text_b])), "bag_of_words"
+
+
+def rank_similar_profiles(
+    reference_skills: list[str],
+    candidate_profiles: list[tuple[str, list[str]]],
+) -> tuple[list[tuple[str, float]], str]:
+    """Rank candidate IDs by skill-profile similarity to the selected candidate."""
+    global _embedding_runtime_failed
+
+    reference_text = " ".join(
+        skill.strip() for skill in reference_skills if isinstance(skill, str) and skill.strip()
+    )
+    candidate_texts = [
+        " ".join(skill.strip() for skill in skills if isinstance(skill, str) and skill.strip())
+        for _, skills in candidate_profiles
+    ]
+    if not candidate_profiles:
+        return [], "bag_of_words"
+
+    texts = [reference_text, *candidate_texts]
+    method = "bag_of_words"
+    embeddings = None
+    candidate_vector_indices = list(range(len(candidate_profiles)))
+
+    model = None if _embedding_runtime_failed else _load_embedding_model()
+    if model is not None and reference_text:
+        try:
+            candidate_vector_indices = [
+                index for index, text in enumerate(candidate_texts) if text
+            ]
+            embeddings = np.asarray(
+                model.encode(
+                    [
+                        reference_text,
+                        *(candidate_texts[index] for index in candidate_vector_indices),
+                    ],
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                    show_progress_bar=False,
+                ),
+                dtype=float,
+            )
+            method = "sentence_transformers"
+        except Exception:
+            _embedding_runtime_failed = True
+            logger.warning(
+                "Sentence-transformers inference failed; using Bag of Words fallback.",
+                exc_info=True,
+            )
+
+    if embeddings is None:
+        embeddings = _embed_bag_of_words(texts)
+        candidate_vector_indices = list(range(len(candidate_profiles)))
+
+    reference = embeddings[0]
+    reference_norm = np.linalg.norm(reference)
+    candidate_vectors = {
+        candidate_index: embeddings[vector_index + 1]
+        for vector_index, candidate_index in enumerate(candidate_vector_indices)
+    }
+    similarities = []
+    for candidate_index, ((candidate_id, _), candidate_text) in enumerate(
+        zip(candidate_profiles, candidate_texts)
+    ):
+        vector = candidate_vectors.get(candidate_index)
+        if vector is None:
+            similarities.append((candidate_id, 0.0))
+            continue
+        vector_norm = np.linalg.norm(vector)
+        if not reference_text or not candidate_text or not reference_norm or not vector_norm:
+            similarity = 0.0
+        else:
+            similarity = float(np.dot(reference, vector) / (reference_norm * vector_norm))
+            similarity = max(0.0, min(1.0, similarity))
+        similarities.append((candidate_id, similarity))
+
+    similarities.sort(key=lambda item: item[1], reverse=True)
+    return similarities, method
 
 
 def _skill_overlap_from_judgment(
@@ -249,8 +320,8 @@ def matching_scoring_node(state: dict) -> dict:
     job_required_skills = getattr(job, "required_skills", []) or []
     job_nice_skills = getattr(job, "nice_to_have_skills", []) or []
 
-    resume_text = _build_similarity_text(resume_skills)
-    job_text = _build_similarity_text(job_required_skills + job_nice_skills)
+    resume_text = " ".join(resume_skills)
+    job_text = " ".join(job_required_skills + job_nice_skills)
 
     semantic_similarity, similarity_method = _semantic_similarity(resume_text, job_text)
 
@@ -346,13 +417,6 @@ def routing_decision(state: dict) -> str:
     fallait tomber EXACTEMENT sur 13.0 pour déclencher une revue humaine.)
     """
     score = state["score"]
-    if "ocr_quality_score" in state:
-        quality_score = state["ocr_quality_score"]
-        if (
-            quality_score is None
-            or quality_score < MIN_OCR_QUALITY_FOR_AUTOMATIC_DECISION
-        ):
-            return "needs_human_review"
 
     if not score.hard_filters_passed:
         return "reject"

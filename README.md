@@ -8,7 +8,9 @@ et on obtient un classement cliquable avec score, explication, décision et emai
 
 Architecture hybride : nœuds fonction déterministes + nœuds LLM single-shot orchestrés par LangGraph avec :
 - OCR à deux niveaux : extraction texte native → fallback Qwen VLM 
-- Gardrails anti prompt-injection sur tout contenu non fiable (CV, offres copiées-collées)
+- Classifieur ML local anti prompt-injection sur le texte avant/après les appels LLM,
+  plus consigne OCR dédiée à Qwen (le modèle d'environ 1,13 Go est téléchargé au premier
+  usage; détection non garantie)
 - Prompt engineering : Système de prompts construit avec la méthode CRAFT (Context, Role, Action, Format, Tone) + few-shot
 - Scoring par pondération apprise et déterministe, enrichi par un jugement LLM
   de correspondance des compétences, avec un contexte de vocabulaire propre à chaque domaine métier
@@ -178,6 +180,13 @@ streamlit run app.py
 Quand un CV est scanné/image (extraction native de mauvaise qualité), le pipeline
 bascule sur `qwen_vlm_ocr`
 
+Le système n'affiche pas de « confiance Qwen » : le modèle ne fournit pas de score OCR
+calibré. Il calcule un score heuristique de qualité du texte extrait (longueur,
+caractères imprimables et présence de sections de CV), affiché comme estimation. Si ce
+score est inférieur à 0,55 ou indisponible, le choix shortlist/rejet est soumis à une
+revue humaine obligatoire. Cette heuristique ne garantit pas l'exactitude de la
+transcription ; le CV doit être vérifié visuellement.
+
 ### Option A
 ```bash
 # Dans .env
@@ -223,6 +232,12 @@ l'erreur et retombe sur une similarité Bag of Words ; la méthode employée est
 dans le détail du candidat. Les poids et seuils doivent être validés sur un jeu de
 candidatures annotées avant un usage réel : le remplacement des vecteurs change la
 distribution des similarités.
+
+Depuis le détail d'un candidat, le recruteur peut aussi afficher les cinq profils les
+plus proches parmi les candidats analysés pour la même offre. Le classement compare les
+compétences structurées avec le même modèle Sentence Transformers (ou le fallback Bag
+of Words) et n'altère ni le score ni la décision de recrutement : c'est un outil de
+comparaison à examiner par le recruteur.
 
 ### D'où vient le premier ingrédient (compétences en commun) ?
 

@@ -1,8 +1,4 @@
-"""
-Nœud LLM : génère une explication lisible du score. Ne reçoit JAMAIS le texte brut du CV —
-uniquement les objets structurés déjà validés, donc pas de surface d'attaque prompt-injection
-à ce stade (le sandwiching n'est même pas nécessaire ici, l'entrée est déjà des données propres).
-"""
+"""LLM node that explains a score using checked, structured candidate/job data."""
 from __future__ import annotations
 import os
 from dotenv import load_dotenv
@@ -13,6 +9,9 @@ except ImportError:
     from mistralai import Mistral
 
 from prompts.system_prompts import EXPLANATION_SYSTEM_PROMPT
+from security.prompt_injection_guard import (
+    pre_llm_hook, post_llm_hook, raise_if_unsafe,
+)
 
 load_dotenv()
 client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
@@ -31,6 +30,12 @@ def explanation_node(state: dict) -> dict:
         f"filtres durs passés={score.hard_filters_passed}, score final={score.final_score}.\n"
         f"Compétences manquantes: {score.missing_skills}. Filtres échoués: {score.failed_filters}."
     )
+    guard = pre_llm_hook(
+        context,
+        "Explique les indicateurs et le score sans modifier la décision.",
+        "explanation",
+    )
+    raise_if_unsafe(guard, "explanation")
 
     response = client.chat.complete(
         model=MODEL_NAME,
@@ -38,10 +43,12 @@ def explanation_node(state: dict) -> dict:
         temperature=0.3,
         messages=[
             {"role": "system", "content": EXPLANATION_SYSTEM_PROMPT},
-            {"role": "user", "content": context},
+            {"role": "user", "content": guard.sanitized_text},
         ],
     )
     explanation = response.choices[0].message.content
     if not isinstance(explanation, str):
         explanation = str(explanation)
-    return {"explanation": explanation}
+    post_guard = post_llm_hook(explanation)
+    raise_if_unsafe(post_guard, "explanation_output")
+    return {"explanation": post_guard.sanitized_text}

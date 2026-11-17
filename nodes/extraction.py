@@ -14,7 +14,9 @@ try:
 except ImportError:
     from mistralai import Mistral
 
-from security.prompt_injection_guard import pre_llm_hook, post_llm_hook, escalate_if_unsafe
+from security.prompt_injection_guard import (
+    pre_llm_hook, post_llm_hook, escalate_if_unsafe, raise_if_unsafe,
+)
 from prompts.system_prompts import (
     CV_EXTRACTION_SYSTEM_PROMPT,
     CV_EXTRACTION_FEWSHOT,
@@ -41,6 +43,7 @@ def extraction_node(state: dict) -> dict:
         node_name="extraction",
     )
     escalate_if_unsafe(guard, "extraction", security_flags)
+    raise_if_unsafe(guard, "extraction")
 
     messages = build_messages(
         CV_EXTRACTION_SYSTEM_PROMPT, CV_EXTRACTION_FEWSHOT, guard.sanitized_text
@@ -60,6 +63,7 @@ def extraction_node(state: dict) -> dict:
     # --- hook post-LLM : vérifie que la sortie est bien un JSON conforme --------------
     post_guard = post_llm_hook(output_text, expected_schema_keys=EXPECTED_KEYS)
     escalate_if_unsafe(post_guard, "extraction_output", security_flags)
+    raise_if_unsafe(post_guard, "extraction_output")
 
     try:
         data = json.loads(output_text)

@@ -57,3 +57,6 @@ rl/feedback_log.jsonl
 # MCP / local tool artifacts
 .mcp/
 .env
+
+
+GUIDE_ENTRETIEN_TECHNIQUE.md
