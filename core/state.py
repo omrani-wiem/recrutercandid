@@ -90,6 +90,9 @@ class PipelineState(TypedDict, total=False):
     rejection_email_draft: dict
     rejection_email_approved: bool
     rejection_email_sent: bool
+    email_sent_to: str | None
+    emal_test_mode: bool
+    email_original_recipient: str | None
     email_send_error: Optional[str]
 
     # sécurité / observabilité

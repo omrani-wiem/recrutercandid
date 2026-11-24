@@ -584,6 +584,8 @@ def render_candidate_detail():
                 action="edit" if edited else "approve",
                 edited_subject=subject, edited_body=body,
             )
+            if result.get("rejection_email_sent"):
+                st.toast(f"Email envoyé à {result.get('email_sent_to')} (mode test Resend)", icon="✅")
             data_store.save_result_for_candidate(candidate["id"], job["id"], result)
             st.rerun()
         if c2.button("Ne pas envoyer"):
@@ -593,6 +595,16 @@ def render_candidate_detail():
 
     if status == STATUS_REJECTED_EMAIL_FAILED:
         st.error(f"L'envoi a échoué : {result.get('email_send_error')}")
+
+    if status == STATUS_REJECTED_EMAIL_SENT:
+        if result.get("email_test_mode"):
+            st.success(
+                f"✅ Email envoyé à **{result.get('email_sent_to')}**. "
+                "Mode test : le plan gratuit de Resend n'autorise l'envoi qu'à cette adresse "
+                f"(destinataire réel : {result.get('email_original_recipient') or 'non renseigné'})."
+            )
+        else:
+            st.success(f"✅ Email envoyé à **{result.get('email_sent_to')}**.")
 
     # --- Avis recruteur (feedback pour recalibrage du score) ---
     if score:

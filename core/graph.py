@@ -149,14 +149,15 @@ def send_rejection_email(state: dict) -> dict:
             return {
                 "rejection_email_sent": ok,
                 "email_send_error": None if ok else f"Resend API returned {response.status}",
+                "email_sent_to": to_address if ok else None,
+                "email_test_mode": bool(test_recipient) and ok,
+                "email_original_recipient": original,
             }
     except urllib.error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="ignore")
         return {"rejection_email_sent": False, "email_send_error": f"Resend API HTTP {exc.code}: {details}"}
     except Exception as exc:
         return {"rejection_email_sent": False, "email_send_error": f"Resend API request failed: {exc}"}
-
-
     def _call_rest() -> dict:
         payload = {
             "from": sender_address,

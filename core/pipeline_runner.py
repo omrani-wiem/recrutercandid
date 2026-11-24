@@ -74,6 +74,9 @@ def _normalize(result: dict) -> dict:
         "rejection_email_sent": result.get("rejection_email_sent"),
         "email_send_error": result.get("email_send_error"),
         "interrupt_payload": interrupt_payload,
+        "email_sent_to": result.get("email_sent_to"),
+        "email_test_mode": result.get("email_test_mode"),
+        "email_original_recipient": result.get("email_original_recipient"),
     }
 
     if interrupt_payload is not None:
