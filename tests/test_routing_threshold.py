@@ -1,7 +1,7 @@
 import unittest
 
 from nodes.matching_scoring import routing_decision
-from state import JobRequirements, MatchScore, ResumeProfile
+from core.state import JobRequirements, MatchScore, ResumeProfile
 
 
 class RoutingThresholdTests(unittest.TestCase):

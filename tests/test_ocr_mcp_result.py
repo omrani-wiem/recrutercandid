@@ -2,7 +2,7 @@ import unittest
 
 from mcp.types import CallToolResult, TextContent
 
-from graph import _mcp_result_payload
+from core.graph import _mcp_result_payload
 
 
 class McpResultPayloadTests(unittest.TestCase):

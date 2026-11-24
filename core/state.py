@@ -46,10 +46,7 @@ class MatchScore(BaseModel):
     matched_skills: list[str] = Field(default_factory=list)
     missing_skills: list[str] = Field(default_factory=list)
 
-    # transparence : comment le recoupement de compétences a été établi.
-    # "keyword"      -> correspondance mot-à-mot / synonymes (rapide, déterministe, limité)
-    # "llm_assisted" -> un LLM a jugé qu'une compétence concrète du candidat satisfait une
-    #                   exigence formulée de façon générale (voir nodes/skill_relevance.py)
+   
     skill_matching_method: Literal["keyword", "llm_assisted"] = "keyword"
     similarity_method: Literal["sentence_transformers", "bag_of_words"] = "bag_of_words"
 
@@ -79,15 +76,14 @@ class PipelineState(TypedDict, total=False):
     resume: ResumeProfile
     job: JobRequirements
 
-    # jugement de correspondance sémantique des compétences (assisté par LLM, optionnel).
-    # Voir nodes/skill_relevance.py : ne décide jamais du score final, ne fait que juger
-    # si une compétence concrète du candidat satisfait une exigence formulée en termes
-    # généraux (ex: "Python" satisfait "compétences en analyse de données").
+    
     skill_relevance_judgment: Optional[dict]
 
     # matching
     score: MatchScore
     decision: Literal["shortlist", "reject", "needs_human_review"]
+    security_review_approved: bool
+    security_review_rejected: bool
 
     # explication / communication
     explanation: str

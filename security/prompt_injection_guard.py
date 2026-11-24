@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from html import escape
 from typing import Any
+import json
+
 
 
 MODEL_ID = "daniel315a/xlm-roberta-prompt-injection-multilingual"
@@ -142,9 +144,17 @@ def _sandwich(untrusted_text: str, task_instruction: str) -> str:
     )
 
 
-def pre_llm_hook(untrusted_text: str, task_instruction: str, node_name: str) -> GuardResult:
-    """Classify all untrusted text before constructing an LLM request."""
-    result = _classify(untrusted_text)
+def pre_llm_hook(
+    untrusted_text: str,
+    task_instruction: str,
+    node_name: str,
+    classify: bool = True,
+) -> GuardResult:
+    """Classify untrusted text (optionnel) puis l'encadre avant l'appel LLM."""
+    if classify:
+        result = _classify(untrusted_text)
+    else:
+        result = GuardResult(is_safe=True)
     result.sanitized_text = _sandwich(untrusted_text, task_instruction)
     return result
 
@@ -155,21 +165,34 @@ def raise_if_unsafe(guard_result: GuardResult, node_name: str) -> None:
         raise UnsafeLLMContentError(node_name, guard_result.flags)
 
 
+
 def post_llm_hook(llm_output: str, expected_schema_keys: list[str] | None = None) -> GuardResult:
-    """Classify an LLM response and optionally check required JSON keys."""
-    result = _classify(llm_output)
-    if expected_schema_keys:
-        missing = [key for key in expected_schema_keys if key not in llm_output]
-        if missing:
-            result.flags.append(f"clés de schéma manquantes: {missing}")
-            result.is_safe = False
-    result.sanitized_text = llm_output
-    return result
+    """Valide la sortie du LLM (JSON + clés attendues), sans classifieur."""
+    try:
+        data = json.loads(llm_output)
+    except json.JSONDecodeError:
+        return GuardResult(False, ["sortie non JSON"], llm_output)
+
+    if not isinstance(data, dict):
+        return GuardResult(False, ["la sortie JSON n'est pas un objet"], llm_output)
+
+    missing = [k for k in (expected_schema_keys or []) if k not in data]
+    if missing:
+        return GuardResult(False, [f"clés de schéma manquantes: {missing}"], llm_output)
+
+    return GuardResult(True, [], llm_output, 0.0)
+
+def post_llm_text_hook(llm_output: str) -> GuardResult:
+    """Valide une sortie en texte libre : non vide, c'est tout."""
+    text = (llm_output or "").strip()
+    if not text:
+        return GuardResult(False, ["sortie vide"], llm_output)
+    return GuardResult(True, [], text, 0.0)
 
 
 def escalate_if_unsafe(guard_result: GuardResult, node_name: str, state_flags: list) -> None:
     """Add a blocked SecurityFlag for a failed check before the caller raises."""
-    from state import SecurityFlag
+    from core.state import SecurityFlag
 
     if not guard_result.is_safe:
         state_flags.append(SecurityFlag(

@@ -7,22 +7,18 @@ from __future__ import annotations
 import json
 import os
 from dotenv import load_dotenv
+from core.llm_client import client, MODEL_NAME
 
-try:
-    from mistralai.client import Mistral
-except ImportError:
-    from mistralai import Mistral
+
 
 from security.prompt_injection_guard import (
-    pre_llm_hook, post_llm_hook, escalate_if_unsafe, raise_if_unsafe,
+    pre_llm_hook, post_llm_hook,
 )
 from prompts.system_prompts import (
     CV_IMPROVEMENT_SYSTEM_PROMPT, CV_IMPROVEMENT_FEWSHOT, build_messages, extract_json_payload,
 )
 
 load_dotenv()
-client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
-MODEL_NAME = os.getenv("MODEL_NAME", "mistral-small-latest")
 
 EXPECTED_KEYS = ["skills_manquantes", "elements_a_retirer", "conseils_generaux", "points_forts_a_souligner"]
 
@@ -39,13 +35,13 @@ def generate_cv_improvement_report(cv_text: str, job_title: str, job_description
             task_instruction="Compare ce CV à l'offre ci-dessous et produis un rapport d'amélioration.",
             node_name="cv_advisor",
         )
-        escalate_if_unsafe(guard, "cv_advisor", security_flags)
-        raise_if_unsafe(guard, "cv_advisor")
+        if not guard.is_safe:
+           security_flags.append({"node": "cv_advisor", "reason": "; ".join(guard.flags)})
         messages = build_messages(
             CV_IMPROVEMENT_SYSTEM_PROMPT, CV_IMPROVEMENT_FEWSHOT, guard.sanitized_text
         )
 
-        response = client.chat.complete(
+        response = client.chat.completions.create(
             model=MODEL_NAME, max_tokens=1200, temperature=0.3, messages=messages,
         )
         output_text = response.choices[0].message.content
@@ -54,8 +50,12 @@ def generate_cv_improvement_report(cv_text: str, job_title: str, job_description
         output_text = extract_json_payload(output_text)
 
         post_guard = post_llm_hook(output_text, expected_schema_keys=EXPECTED_KEYS)
-        escalate_if_unsafe(post_guard, "cv_advisor_output", security_flags)
-        raise_if_unsafe(post_guard, "cv_advisor_output")
+        if not post_guard.is_safe:
+            return {
+                "skills_manquantes": [], "elements_a_retirer": [], "conseils_generaux": [],
+                "points_forts_a_souligner": [],
+                "error": "Le modèle n'a pas renvoyé un rapport valide. Relance l'analyse.",
+            }
 
         data = json.loads(output_text)
         return {
@@ -91,22 +91,25 @@ def generate_motivation_letter(cv_text: str, job_title: str, job_description: st
             task_instruction="Rédige une lettre de motivation à partir de ce CV pour l'offre ci-dessous.",
             node_name="cv_advisor_letter",
         )
-        escalate_if_unsafe(guard, "cv_advisor_letter", security_flags)
-        raise_if_unsafe(guard, "cv_advisor_letter")
+        if not guard.is_safe:
+            security_flags.append({"node": "cv_advisor_letter", "reason": "; ".join(guard.flags)})
         messages = build_messages(
             MOTIVATION_LETTER_SYSTEM_PROMPT, MOTIVATION_LETTER_FEWSHOT,
             guard.sanitized_text,
         )
 
-        response = client.chat.complete(model=MODEL_NAME, max_tokens=900, temperature=0.4, messages=messages)
+        response = client.chat.completions.create(model=MODEL_NAME, max_tokens=900, temperature=0.4, messages=messages)
         output_text = response.choices[0].message.content
         if not isinstance(output_text, str):
             output_text = str(output_text)
         output_text = extract_json_payload(output_text)
 
         post_guard = post_llm_hook(output_text, expected_schema_keys=LETTER_EXPECTED_KEYS)
-        escalate_if_unsafe(post_guard, "cv_advisor_letter_output", security_flags)
-        raise_if_unsafe(post_guard, "cv_advisor_letter_output")
+        if not post_guard.is_safe:
+            return {
+                "subject": "", "body": "",
+                "error": "Le modèle n'a pas renvoyé une lettre valide. Relance la génération.",
+            }
 
         data = json.loads(output_text)
         return {"subject": data.get("subject", ""), "body": data.get("body", ""), "error": None}

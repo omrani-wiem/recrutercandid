@@ -7,22 +7,24 @@ from datetime import datetime
 import streamlit as st
 from dotenv import load_dotenv
 
-import data_store
-from graph import build_graph
-from ui_helpers import candidates_to_analyze
-from pipeline_runner import (
-    run_analysis, resume_decision, resume_email_review,
+import services.data_store as data_store
+from core.graph import build_graph
+from ui.ui_helpers import candidates_to_analyze
+from core.pipeline_runner import (
+    run_analysis, resume_decision, resume_email_review, resume_security_review,
+    security_review_text,
     STATUS_SHORTLISTED, STATUS_PENDING_DECISION, STATUS_PENDING_EMAIL_REVIEW,
+    STATUS_PENDING_SECURITY_REVIEW, STATUS_SECURITY_REVIEW_REJECTED,
     STATUS_REJECTED_EMAIL_SENT, STATUS_REJECTED_EMAIL_CANCELLED,
     STATUS_REJECTED_EMAIL_FAILED, STATUS_ERROR,
 )
 from rl.feedback_store import append_feedback, load_feedback_log, clear_feedback_log
 from rl.scoring_model import offline_update
 
-import auth
-from job_search import search_jobs_abroad, ADZUNA_COUNTRIES
+import services.auth as auth
+from services.job_search import search_jobs_abroad, ADZUNA_COUNTRIES
 
-from cv_advisor import generate_cv_improvement_report
+from services.cv_advisor import generate_cv_improvement_report
 from nodes.ocr import extract_native_text
 from nodes.matching_scoring import rank_similar_profiles
 
@@ -32,6 +34,8 @@ st.set_page_config(page_title="Tri de CV", page_icon="📄", layout="wide")
 
 STATUS_LABELS = {
     STATUS_SHORTLISTED: (" Retenu", "success"),
+    STATUS_PENDING_SECURITY_REVIEW: (" CV à vérifier", "warning"),
+    STATUS_SECURITY_REVIEW_REJECTED: (" Analyse annulée après vérification", "info"),
     STATUS_PENDING_DECISION: (" Décision à prendre", "warning"),
     STATUS_PENDING_EMAIL_REVIEW: (" Email à valider", "warning"),
     STATUS_REJECTED_EMAIL_SENT: (" Refusé, email envoyé", "info"),
@@ -371,6 +375,65 @@ def render_candidate_detail():
 
     st.title(candidate_display_name(candidate, job["id"]))
     status_badge(status)
+
+    if status == STATUS_PENDING_SECURITY_REVIEW:
+        payload = result.get("interrupt_payload") or {}
+        probability = payload.get("injection_probability")
+        st.warning(
+            "Le classifieur a signalé un risque possible dans le texte extrait. "
+            "Cela peut être un faux positif. Vérifiez le texte ci-dessous avant de "
+            "l'envoyer au modèle d'analyse."
+        )
+        if probability is not None:
+            st.metric("Probabilité estimée par le classifieur", f"{probability:.1%}")
+
+        extracted_text = security_review_text(
+            st.session_state.graph_app, candidate, job
+        )
+        with st.expander("Texte extrait du CV à vérifier", expanded=True):
+            if extracted_text.strip():
+                st.text_area(
+                    "Le texte ci-dessous sera transmis au LLM uniquement si vous confirmez.",
+                    value=extracted_text,
+                    height=350,
+                    disabled=True,
+                    key=f"security_review_text_{candidate_id}_{job['id']}",
+                )
+            else:
+                st.error(
+                    "Aucun texte n'a été extrait. N'autorisez pas l'analyse; "
+                    "vérifiez le PDF ou l'OCR."
+                )
+
+        approve_col, reject_col = st.columns(2)
+        if approve_col.button(
+            "Confirmer et poursuivre l'analyse",
+            type="primary",
+            disabled=not bool(extracted_text.strip()),
+            key=f"approve_security_review_{candidate_id}_{job['id']}",
+        ):
+            result = resume_security_review(
+                st.session_state.graph_app, candidate, job, action="approve"
+            )
+            data_store.save_result_for_candidate(candidate["id"], job["id"], result)
+            st.rerun()
+        if reject_col.button(
+            "Annuler l'analyse",
+            key=f"reject_security_review_{candidate_id}_{job['id']}",
+        ):
+            result = resume_security_review(
+                st.session_state.graph_app, candidate, job, action="reject"
+            )
+            data_store.save_result_for_candidate(candidate["id"], job["id"], result)
+            st.rerun()
+        return
+
+    if status == STATUS_SECURITY_REVIEW_REJECTED:
+        st.info(
+            "L'analyse a été annulée après la revue de sécurité. Aucun appel LLM "
+            "n'a été effectué avec le texte extrait."
+        )
+        return
 
     if status == STATUS_ERROR:
         st.error(f"Erreur d'analyse : {result.get('error', 'cause inconnue')}")

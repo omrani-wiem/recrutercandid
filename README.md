@@ -10,7 +10,7 @@ Architecture hybride : nœuds fonction déterministes + nœuds LLM single-shot o
 - OCR à deux niveaux : extraction texte native → fallback Qwen VLM 
 - Classifieur ML local anti prompt-injection sur le texte avant/après les appels LLM,
   plus consigne OCR dédiée à Qwen (le modèle d'environ 1,13 Go est téléchargé au premier
-  usage; détection non garantie)
+  usage; une alerte sur le CV suspend l'analyse pour vérification humaine avant l'appel LLM)
 - Prompt engineering : Système de prompts construit avec la méthode CRAFT (Context, Role, Action, Format, Tone) + few-shot
 - Scoring par pondération apprise et déterministe, enrichi par un jugement LLM
   de correspondance des compétences, avec un contexte de vocabulaire propre à chaque domaine métier

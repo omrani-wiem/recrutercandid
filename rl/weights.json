@@ -1,7 +1,7 @@
 {
-  "semantic_similarity": 0.29977500843574145,
-  "skill_overlap_ratio": 0.3479015929413889,
-  "experience_match": 0.24819348037061076,
-  "hard_filters_passed": 0.09790159294138888,
-  "bias": -0.0020984070586111247
+  "semantic_similarity": 0.29972832172854913,
+  "skill_overlap_ratio": 0.3474847473414573,
+  "experience_match": 0.24806175716103238,
+  "hard_filters_passed": 0.09748474734145726,
+  "bias": -0.002515252658542736
 }

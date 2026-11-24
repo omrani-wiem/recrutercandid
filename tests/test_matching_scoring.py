@@ -4,7 +4,7 @@ from unittest.mock import call, patch
 from nodes.matching_scoring import matching_scoring_node, routing_decision, REJECT_THRESHOLD
 import nodes.matching_scoring as scoring
 from nodes.guardrails import guardrails_node
-from state import JobRequirements, ResumeProfile
+from core.state import JobRequirements, ResumeProfile
 
 
 class MatchingScoringTests(unittest.TestCase):

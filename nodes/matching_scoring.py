@@ -7,7 +7,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from state import MatchScore
+from core.state import MatchScore
 from rl.scoring_model import ScoringModel
 
 logger = logging.getLogger(__name__)
@@ -16,10 +16,6 @@ _scoring_model = ScoringModel.load_latest()
 EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
 _embedding_runtime_failed = False
 
-# Seuils de routage, exprimés sur l'échelle finale /20 (cf. routing_decision).
-# Un score STRICTEMENT au-dessus de SHORTLIST_THRESHOLD passe en shortlist direct.
-# Un score STRICTEMENT en dessous de REJECT_THRESHOLD est rejeté direct.
-# Entre les deux : zone grise -> revue humaine (human_review_decision).
 REJECT_THRESHOLD = 8.0
 SHORTLIST_THRESHOLD = 14.0
 
