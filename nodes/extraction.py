@@ -113,6 +113,7 @@ def extraction_node(state: dict) -> dict:
     try:
         data = json.loads(output_text)
         resume = ResumeProfile(**data)
+        resume.full_name = state["contact_info"]["full_name"] or resume.full_name
     except (json.JSONDecodeError, TypeError, ValueError) as e:
         # échec de parsing = on ne devine jamais, on route vers la revue humaine
         security_flags.append(SecurityFlag(

@@ -16,7 +16,7 @@ from nodes.guardrails import guardrails_node
 from nodes.explanation import explanation_node
 from nodes.rejection_email import rejection_email_node
 from nodes.human_review import human_review_decision_node, human_review_email_node
-
+from nodes.anonymize import anonymize_node
 
 def _build_resend_headers(api_key: str) -> dict:
     return {
@@ -234,15 +234,18 @@ def build_graph():
     graph.add_node("rejection_email", rejection_email_node)
     graph.add_node("human_review_email", human_review_email_node)
     graph.add_node("send_email", send_rejection_email)
+    graph.add_node("anonymize", anonymize_node)
 
     graph.add_edge(START, "ocr")
 
     
     graph.add_conditional_edges("ocr", needs_vlm_fallback, {
         "qwen_vlm_ocr": "qwen_vlm_ocr",
-        "extraction": "extraction",
+        "extraction": "anonymize",
     })
-    graph.add_edge("qwen_vlm_ocr", "extraction")
+    graph.add_edge("qwen_vlm_ocr", "anonymize") 
+    graph.add_edge("anonymize", "extraction")
+
 
    
     graph.add_conditional_edges("extraction", route_after_extraction, {

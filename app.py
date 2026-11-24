@@ -6,10 +6,11 @@ from datetime import datetime
 
 import streamlit as st
 from dotenv import load_dotenv
-
+from services.mail_ingest import fetch_cvs_from_mailbox
 import services.data_store as data_store
 from core.graph import build_graph
 from ui.ui_helpers import candidates_to_analyze
+from services.summary_pdf import build_summary_pdf 
 from core.pipeline_runner import (
     run_analysis, resume_decision, resume_email_review, resume_security_review,
     security_review_text,
@@ -164,6 +165,18 @@ with st.sidebar:
              data_store.add_candidate_cv(f.getvalue(), f.name, apply_to_all_jobs=True)
          st.success(f"{len(cv_files)} CV ajouté(s) au vivier.")
          st.rerun()
+
+    if st.button("📬 Récupérer les CV de la boîte mail"):
+     try:
+        cvs = fetch_cvs_from_mailbox()
+        for cv in cvs:
+            data_store.add_candidate_cv(cv["content"], cv["filename"], apply_to_all_jobs=True)
+        st.success(f"{len(cvs)} CV importé(s).")
+        if cvs:
+            st.rerun()
+     except Exception as exc:
+        st.error(f"Import impossible : {exc}")  
+
 
      st.divider()
      st.header("Amélioration du score")
@@ -490,6 +503,17 @@ def render_candidate_detail():
             if score.get("failed_filters"):
                 st.write(f"**Conditions non respectées :** {', '.join(score['failed_filters'])}")
 
+        if score and status == STATUS_SHORTLISTED:
+         st.download_button(
+         "📄 Télécharger le dossier de synthèse (PDF)",
+         data=build_summary_pdf(candidate_display_name(candidate, job["id"]), job, result),
+         file_name=f"synthese_{candidate_id[:8]}.pdf",
+         mime="application/pdf",
+    )
+
+
+
+    
     if resume:
         col_a, col_b = st.columns(2)
         with col_a:
