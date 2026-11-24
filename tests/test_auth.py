@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import auth
+import services.auth as auth
 
 
 class AuthTests(unittest.TestCase):

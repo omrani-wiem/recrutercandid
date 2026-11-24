@@ -1,9 +1,10 @@
 """
 Orchestration des pauses/reprises du graphe LangGraph pour un couple (candidat, offre).
 
-Le graphe (graph.py) se met en pause (interrupt()) à deux endroits :
-  1. decision_review : score en zone grise -> l'humain choisit shortlist/reject
-  2. email_review    : avant tout envoi d'e-mail de refus -> l'humain approuve/modifie/annule
+Le graphe (graph.py) se met en pause (interrupt()) à trois endroits :
+  1. security_review : contenu CV signalé -> le recruteur vérifie avant tout appel LLM
+  2. decision_review : score en zone grise -> l'humain choisit shortlist/reject
+  3. email_review    : avant tout envoi d'e-mail de refus -> l'humain approuve/modifie/annule
 
 Ce module fait le pont entre ces pauses et l'interface Streamlit : il lance/relance le
 graphe, détecte les pauses, et renvoie un statut normalisé facile à afficher.
@@ -20,6 +21,8 @@ from typing import Any
 from langgraph.types import Command
 
 STATUS_SHORTLISTED = "shortlisted"
+STATUS_PENDING_SECURITY_REVIEW = "pending_security_review"
+STATUS_SECURITY_REVIEW_REJECTED = "security_review_rejected"
 STATUS_PENDING_DECISION = "pending_decision"
 STATUS_PENDING_EMAIL_REVIEW = "pending_email_review"
 STATUS_REJECTED_EMAIL_SENT = "rejected_email_sent"
@@ -64,7 +67,9 @@ def _normalize(result: dict) -> dict:
         "job": _to_plain(result.get("job")),
         "explanation": result.get("explanation", ""),
         "ocr_error": result.get("ocr_error"),
-        "security_flags": result.get("security_flags", []),
+        "security_flags": [
+            _to_plain(flag) for flag in result.get("security_flags", [])
+        ],
         "rejection_email_draft": result.get("rejection_email_draft"),
         "rejection_email_sent": result.get("rejection_email_sent"),
         "email_send_error": result.get("email_send_error"),
@@ -76,12 +81,16 @@ def _normalize(result: dict) -> dict:
             base["status"] = STATUS_PENDING_DECISION
         elif interrupt_payload.get("type") == "email_review":
             base["status"] = STATUS_PENDING_EMAIL_REVIEW
+        elif interrupt_payload.get("type") == "security_review":
+            base["status"] = STATUS_PENDING_SECURITY_REVIEW
         else:
             base["status"] = STATUS_ERROR
         return base
 
     # Pas d'interrupt : le graphe est allé jusqu'au bout.
-    if result.get("rejection_email_draft") is None:
+    if result.get("security_review_rejected"):
+        base["status"] = STATUS_SECURITY_REVIEW_REJECTED
+    elif result.get("rejection_email_draft") is None:
         # Jamais passé par la branche refus -> shortlist automatique ou zone grise
         # validée en shortlist.
         base["status"] = STATUS_SHORTLISTED
@@ -113,6 +122,30 @@ def resume_decision(graph_app, candidate: dict, job: dict, decision: str) -> dic
     config = _thread_config(candidate["id"], job["id"])
     try:
         result = graph_app.invoke(Command(resume={"decision": decision}), config=config)
+    except Exception as exc:
+        return {"status": STATUS_ERROR, "error": str(exc)}
+    return _normalize(result)
+
+
+def security_review_text(graph_app, candidate: dict, job: dict) -> str:
+    """Read the extracted CV text from the in-memory checkpoint for reviewer display."""
+    snapshot = graph_app.get_state(_thread_config(candidate["id"], job["id"]))
+    return snapshot.values.get("extracted_text", "")
+
+
+def resume_security_review(
+    graph_app,
+    candidate: dict,
+    job: dict,
+    action: str,
+) -> dict:
+    """Resume a graph paused for a possible prompt injection in extracted CV text."""
+    if action not in {"approve", "reject"}:
+        return {"status": STATUS_ERROR, "error": "Action de revue de sécurité invalide."}
+
+    config = _thread_config(candidate["id"], job["id"])
+    try:
+        result = graph_app.invoke(Command(resume={"action": action}), config=config)
     except Exception as exc:
         return {"status": STATUS_ERROR, "error": str(exc)}
     return _normalize(result)

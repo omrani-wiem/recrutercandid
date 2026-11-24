@@ -1,8 +1,10 @@
+import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from state import ResumeProfile, JobRequirements
-import pipeline_runner as pr
+from core.state import ResumeProfile, JobRequirements
+import core.pipeline_runner as pr
 
 
 def _fake_ocr_node(state):
@@ -40,7 +42,7 @@ def _fake_rejection_email_node(state):
 class PipelineRunnerTests(unittest.TestCase):
     def _build_patched_graph(self, resume, job):
         """Construit le graphe avec tous les nœuds LLM remplacés par des versions factices."""
-        import graph as graph_module
+        import core.graph as graph_module
 
         patches = [
             patch.object(graph_module, "ocr_node", _fake_ocr_node),
@@ -54,6 +56,49 @@ class PipelineRunnerTests(unittest.TestCase):
             p.start()
         self.addCleanup(lambda: [p.stop() for p in patches])
         return graph_module.build_graph()
+
+    def _build_security_review_graph(self):
+        """Use the real extraction node but stub the other LLM and OCR integrations."""
+        import core.graph as graph_module
+        import nodes.extraction as extraction_module
+
+        model_response = SimpleNamespace(choices=[
+            SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                "full_name": "CV review candidate",
+                "email": None,
+                "years_experience": 6,
+                "skills": ["python", "sql", "airflow"],
+                "education": [],
+                "certifications": [],
+                "raw_sections": {},
+            })))
+        ])
+        patches = [
+            patch.object(graph_module, "ocr_node", _fake_ocr_node),
+            patch.object(graph_module, "jd_parsing_node", _make_jd_parsing_node(
+                JobRequirements(
+                    title="Data Eng",
+                    required_skills=["python", "sql", "airflow"],
+                    min_years_experience=5,
+                )
+            )),
+            patch.object(graph_module, "skill_relevance_node", _fake_skill_relevance_node),
+            patch.object(graph_module, "explanation_node", _fake_explanation_node),
+            patch.object(graph_module, "rejection_email_node", _fake_rejection_email_node),
+            patch.object(
+                extraction_module.client.chat,
+                "complete",
+                return_value=model_response,
+            ),
+            patch(
+                "security.prompt_injection_guard._injection_probability",
+                side_effect=[0.99, 0.99, 0.01],
+            ),
+        ]
+        for p in patches:
+            p.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        return graph_module.build_graph(), extraction_module
 
     def test_shortlist_path_has_no_interrupt(self):
         resume = ResumeProfile(full_name="Bon Candidat", years_experience=6,
@@ -142,6 +187,37 @@ class PipelineRunnerTests(unittest.TestCase):
         second = pr.resume_decision(app, candidate, job_record, decision="reject")
         self.assertEqual(second["status"], pr.STATUS_PENDING_EMAIL_REVIEW)
         self.assertIsNotNone(second["rejection_email_draft"])
+
+    def test_flagged_cv_can_be_rejected_without_calling_extraction_llm(self):
+        app, extraction_module = self._build_security_review_graph()
+        candidate = {"id": "security-reject", "stored_path": "fake.pdf"}
+        job = {"id": "job-security-reject", "description": "Description"}
+
+        pending = pr.run_analysis(app, candidate, job)
+
+        self.assertEqual(pending["status"], pr.STATUS_PENDING_SECURITY_REVIEW)
+        self.assertNotIn("extracted_text", pending["interrupt_payload"])
+        self.assertEqual(pr.security_review_text(app, candidate, job), "texte CV factice")
+        extraction_module.client.chat.completions.create.assert_not_called()
+
+        result = pr.resume_security_review(app, candidate, job, action="reject")
+
+        self.assertEqual(result["status"], pr.STATUS_SECURITY_REVIEW_REJECTED)
+        extraction_module.clint.chat.completions.create.assert_not_called()
+
+    def test_approved_flagged_cv_continues_analysis(self):
+        app, extraction_module = self._build_security_review_graph()
+        candidate = {"id": "security-approve", "stored_path": "fake.pdf"}
+        job = {"id": "job-security-approve", "description": "Description"}
+
+        pending = pr.run_analysis(app, candidate, job)
+        self.assertEqual(pending["status"], pr.STATUS_PENDING_SECURITY_REVIEW)
+
+        result = pr.resume_security_review(app, candidate, job, action="approve")
+
+        self.assertNotEqual(result["status"], pr.STATUS_ERROR)
+        self.assertEqual(result["resume"]["full_name"], "CV review candidate")
+        self.assertEqual(extraction_module.client.chat.completions.create.call_count, 1)
 
 
 if __name__ == "__main__":

@@ -7,23 +7,26 @@ from datetime import datetime
 import streamlit as st
 from dotenv import load_dotenv
 
-import data_store
-from graph import build_graph
-from ui_helpers import candidates_to_analyze
-from pipeline_runner import (
-    run_analysis, resume_decision, resume_email_review,
+import services.data_store as data_store
+from core.graph import build_graph
+from ui.ui_helpers import candidates_to_analyze
+from core.pipeline_runner import (
+    run_analysis, resume_decision, resume_email_review, resume_security_review,
+    security_review_text,
     STATUS_SHORTLISTED, STATUS_PENDING_DECISION, STATUS_PENDING_EMAIL_REVIEW,
+    STATUS_PENDING_SECURITY_REVIEW, STATUS_SECURITY_REVIEW_REJECTED,
     STATUS_REJECTED_EMAIL_SENT, STATUS_REJECTED_EMAIL_CANCELLED,
     STATUS_REJECTED_EMAIL_FAILED, STATUS_ERROR,
 )
 from rl.feedback_store import append_feedback, load_feedback_log, clear_feedback_log
 from rl.scoring_model import offline_update
 
-import auth
-from job_search import search_jobs_abroad, ADZUNA_COUNTRIES
+import services.auth as auth
+from services.job_search import search_jobs_abroad, ADZUNA_COUNTRIES
 
-from cv_advisor import generate_cv_improvement_report
+from services.cv_advisor import generate_cv_improvement_report
 from nodes.ocr import extract_native_text
+from nodes.matching_scoring import rank_similar_profiles
 
 
 load_dotenv()
@@ -31,6 +34,8 @@ st.set_page_config(page_title="Tri de CV", page_icon="📄", layout="wide")
 
 STATUS_LABELS = {
     STATUS_SHORTLISTED: (" Retenu", "success"),
+    STATUS_PENDING_SECURITY_REVIEW: (" CV à vérifier", "warning"),
+    STATUS_SECURITY_REVIEW_REJECTED: (" Analyse annulée après vérification", "info"),
     STATUS_PENDING_DECISION: (" Décision à prendre", "warning"),
     STATUS_PENDING_EMAIL_REVIEW: (" Email à valider", "warning"),
     STATUS_REJECTED_EMAIL_SENT: (" Refusé, email envoyé", "info"),
@@ -371,6 +376,65 @@ def render_candidate_detail():
     st.title(candidate_display_name(candidate, job["id"]))
     status_badge(status)
 
+    if status == STATUS_PENDING_SECURITY_REVIEW:
+        payload = result.get("interrupt_payload") or {}
+        probability = payload.get("injection_probability")
+        st.warning(
+            "Le classifieur a signalé un risque possible dans le texte extrait. "
+            "Cela peut être un faux positif. Vérifiez le texte ci-dessous avant de "
+            "l'envoyer au modèle d'analyse."
+        )
+        if probability is not None:
+            st.metric("Probabilité estimée par le classifieur", f"{probability:.1%}")
+
+        extracted_text = security_review_text(
+            st.session_state.graph_app, candidate, job
+        )
+        with st.expander("Texte extrait du CV à vérifier", expanded=True):
+            if extracted_text.strip():
+                st.text_area(
+                    "Le texte ci-dessous sera transmis au LLM uniquement si vous confirmez.",
+                    value=extracted_text,
+                    height=350,
+                    disabled=True,
+                    key=f"security_review_text_{candidate_id}_{job['id']}",
+                )
+            else:
+                st.error(
+                    "Aucun texte n'a été extrait. N'autorisez pas l'analyse; "
+                    "vérifiez le PDF ou l'OCR."
+                )
+
+        approve_col, reject_col = st.columns(2)
+        if approve_col.button(
+            "Confirmer et poursuivre l'analyse",
+            type="primary",
+            disabled=not bool(extracted_text.strip()),
+            key=f"approve_security_review_{candidate_id}_{job['id']}",
+        ):
+            result = resume_security_review(
+                st.session_state.graph_app, candidate, job, action="approve"
+            )
+            data_store.save_result_for_candidate(candidate["id"], job["id"], result)
+            st.rerun()
+        if reject_col.button(
+            "Annuler l'analyse",
+            key=f"reject_security_review_{candidate_id}_{job['id']}",
+        ):
+            result = resume_security_review(
+                st.session_state.graph_app, candidate, job, action="reject"
+            )
+            data_store.save_result_for_candidate(candidate["id"], job["id"], result)
+            st.rerun()
+        return
+
+    if status == STATUS_SECURITY_REVIEW_REJECTED:
+        st.info(
+            "L'analyse a été annulée après la revue de sécurité. Aucun appel LLM "
+            "n'a été effectué avec le texte extrait."
+        )
+        return
+
     if status == STATUS_ERROR:
         st.error(f"Erreur d'analyse : {result.get('error', 'cause inconnue')}")
         return
@@ -398,6 +462,13 @@ def render_candidate_detail():
             "Suffisante" if score["candidate_years_experience"] >= score["required_years_experience"] else "Insuffisante",
         )
         col4.metric("Conditions obligatoires", "Respectées" if score["hard_filters_passed"] else "Non respectées")
+
+        similarity_method = {
+            "sentence_transformers": "Sentence Transformers",
+            "bag_of_words": "Bag of Words (repli)",
+        }.get(score.get("similarity_method"))
+        if similarity_method:
+            st.caption(f"Similarité sémantique calculée avec : {similarity_method}.")
 
         if (
             score.get("skill_matching_method") == "keyword"
@@ -430,6 +501,57 @@ def render_candidate_detail():
             st.subheader("Offre")
             st.write(f"**Poste :** {job['title']}")
             st.write(f"**Lieu :** {job.get('location') or 'Non renseigné'}")
+
+    if resume and resume.get("skills"):
+        with st.expander("Trouver des profils similaires pour cette offre"):
+            st.caption(
+                "Comparaison des compétences avec les autres candidats à la même offre. "
+                "Cette proximité est une aide à la comparaison, pas une recommandation "
+                "automatique de recrutement."
+            )
+            similar_candidates = []
+            candidate_by_id = {}
+            for other_candidate in data_store.candidates_for_job(job["id"]):
+                if other_candidate["id"] == candidate_id:
+                    continue
+                other_result = other_candidate.get("results", {}).get(job["id"])
+                other_resume = (other_result or {}).get("resume") or {}
+                other_skills = other_resume.get("skills") or []
+                if not other_skills:
+                    continue
+                similar_candidates.append((other_candidate["id"], other_skills))
+                candidate_by_id[other_candidate["id"]] = (other_candidate, other_result)
+
+            if not similar_candidates:
+                st.info("Aucun autre profil analysé avec des compétences disponibles pour cette offre.")
+            else:
+                ranked_profiles, method = rank_similar_profiles(
+                    resume["skills"],
+                    similar_candidates,
+                )
+                method_label = (
+                    "Sentence Transformers"
+                    if method == "sentence_transformers"
+                    else "Bag of Words (repli)"
+                )
+                st.caption(f"Méthode de similarité : {method_label}.")
+                for rank, (similar_id, similarity) in enumerate(ranked_profiles[:5], start=1):
+                    similar_candidate, similar_result = candidate_by_id[similar_id]
+                    name = candidate_display_name(similar_candidate, job["id"])
+                    similar_score = (similar_result.get("score") or {}).get("final_score")
+                    status_text = STATUS_LABELS.get(
+                        similar_result.get("status"), ("Non évalué", "off")
+                    )[0].strip()
+                    left, right = st.columns([3, 1])
+                    score_text = (
+                        f" · Score : {similar_score}/20" if similar_score is not None else ""
+                    )
+                    left.write(
+                        f"**#{rank} {name}** — proximité {similarity:.0%}"
+                        f" · {status_text}{score_text}"
+                    )
+                    if right.button("Voir le profil", key=f"similar_{candidate_id}_{similar_id}"):
+                        go("candidate_detail", selected_candidate_id=similar_id)
 
     st.divider()
 

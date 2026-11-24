@@ -1,7 +1,7 @@
 import unittest
 
 from nodes.matching_scoring import matching_scoring_node
-from state import JobRequirements, ResumeProfile
+from core.state import JobRequirements, ResumeProfile
 
 
 class SkillRelevanceIntegrationTests(unittest.TestCase):

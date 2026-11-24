@@ -1,6 +1,6 @@
 import unittest
 
-from ui_helpers import candidates_to_analyze
+from ui.ui_helpers import candidates_to_analyze
 
 
 class CandidatesToAnalyzeTests(unittest.TestCase):

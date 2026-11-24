@@ -1,15 +1,12 @@
-"""
-Assemble tous les nœuds en un graphe LangGraph. Deux points d'interruption garantissent
-qu'aucune décision de rejet finale ni aucun envoi d'e-mail ne se produit sans validation
-humaine explicite.
-"""
+"""Assemble the LangGraph workflow and its human-review checkpoints."""
 from __future__ import annotations
 import argparse
+import json
 from langgraph.graph import StateGraph, END, START
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-from state import PipelineState
+from core.state import PipelineState
 from nodes.ocr import ocr_node, needs_vlm_fallback
 from nodes.extraction import extraction_node
 from nodes.jd_parsing import jd_parsing_node
@@ -27,6 +24,29 @@ def _build_resend_headers(api_key: str) -> dict:
         "Content-Type": "application/json",
         "User-Agent": "cv-matching-system/1.0",
     }
+
+
+def _mcp_result_payload(result) -> dict:
+    if result.isError:
+        details = " ".join(
+            item.text for item in result.content if getattr(item, "type", None) == "text"
+        )
+        raise RuntimeError(details or "Le serveur MCP a signalé une erreur.")
+
+    if isinstance(result.structuredContent, dict):
+        return result.structuredContent
+
+    for item in result.content:
+        if getattr(item, "type", None) != "text":
+            continue
+        try:
+            payload = json.loads(item.text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+
+    raise RuntimeError("Le serveur MCP OCR n'a pas renvoyé de résultat structuré.")
 
 
 def qwen_vlm_ocr_node(state: dict) -> dict:
@@ -49,8 +69,10 @@ def qwen_vlm_ocr_node(state: dict) -> dict:
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                result = await session.call_tool("extract_from_image", {"pdf_path": state["cv_path"]})
-                return result
+                tool_result = await session.call_tool(
+                    "extract_from_image", {"pdf_path": state["cv_path"]}
+                )
+                return _mcp_result_payload(tool_result)
 
     import asyncio
     try:
@@ -78,8 +100,8 @@ def send_rejection_email(state: dict) -> dict:
     """
     Appelé uniquement si rejection_email_approved == True. Le nœud lui-même revérifie la
     condition en dur (défense en profondeur, ne fait jamais confiance à un seul contrôle).
+    Envoi via l'API REST de Resend.
     """
-    import asyncio
     import json
     import os
     import urllib.error
@@ -91,36 +113,49 @@ def send_rejection_email(state: dict) -> dict:
     if not state.get("rejection_email_approved") and not override:
         return {"rejection_email_sent": False, "email_send_error": "Envoi non approuvé"}
 
-    resend_url = os.getenv("RESEND_MCP_URL", "https://mcp.resend.com/mcp")
     resend_api_key = os.getenv("RESEND_API_KEY")
     draft = state.get("rejection_email_draft") or {}
-    to_address = override.get("to") or getattr(state.get("resume"), "email", None) or ""
-    sender_address = override.get("from") or os.getenv("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
+
+    original = override.get("to") or getattr(state.get("resume"), "email", None) or ""
+    test_recipient = os.getenv("EMAIL_TEST_RECIPIENT")
+    to_address = test_recipient or original
+
     subject = override.get("subject") or draft.get("subject", "Suite à votre candidature")
+    if test_recipient:
+        subject = f"[TEST → {original or 'inconnu'}] {subject}"
     body = override.get("body") or draft.get("body", "")
+    sender_address = override.get("from") or os.getenv("RESEND_SENDER_EMAIL", "onboarding@resend.dev")
 
     if not resend_api_key:
         return {"rejection_email_sent": False, "email_send_error": "RESEND_API_KEY manquante"}
     if not to_address:
         return {"rejection_email_sent": False, "email_send_error": "Aucune adresse e-mail de destinataire"}
-    if not sender_address:
-        return {"rejection_email_sent": False, "email_send_error": "Aucune adresse expéditrice Resend configurée"}
 
-    async def _call_mcp():
-        from mcp import ClientSession
-        from mcp.client.sse import sse_client
+    payload = {
+        "from": sender_address,
+        "to": [to_address],
+        "subject": subject,
+        "text": body,
+    }
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=_build_resend_headers(resend_api_key),
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            ok = response.status in (200, 202)
+            return {
+                "rejection_email_sent": ok,
+                "email_send_error": None if ok else f"Resend API returned {response.status}",
+            }
+    except urllib.error.HTTPError as exc:
+        details = exc.read().decode("utf-8", errors="ignore")
+        return {"rejection_email_sent": False, "email_send_error": f"Resend API HTTP {exc.code}: {details}"}
+    except Exception as exc:
+        return {"rejection_email_sent": False, "email_send_error": f"Resend API request failed: {exc}"}
 
-        headers = _build_resend_headers(resend_api_key)
-        async with sse_client(url=resend_url, headers=headers) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.call_tool("send_email", {
-                    "to": to_address,
-                    "subject": subject,
-                    "text": body,
-                    "from": sender_address,
-                })
-                return result
 
     def _call_rest() -> dict:
         payload = {
@@ -178,6 +213,11 @@ def route_after_rejection_email(state: dict) -> str:
     return "human_review_email"
 
 
+def route_after_extraction(state: dict) -> str:
+    """Stop when the recruiter rejects a CV flagged by the prompt-injection classifier."""
+    return END if state.get("security_review_rejected") else "jd_parsing"
+
+
 def build_graph():
     graph = StateGraph(PipelineState)
 
@@ -196,18 +236,18 @@ def build_graph():
 
     graph.add_edge(START, "ocr")
 
-    # OCR : branchement natif vs fallback Qwen VLM
+    
     graph.add_conditional_edges("ocr", needs_vlm_fallback, {
         "qwen_vlm_ocr": "qwen_vlm_ocr",
         "extraction": "extraction",
     })
     graph.add_edge("qwen_vlm_ocr", "extraction")
 
-    # parsing JD en parallèle logique, convergent vers le scoring
-    # jd_parsing ne dépend pas du résultat de l'extraction (seulement de jd_text, présent
-    # dès le départ) : on l'enchaîne quand même après extraction pour éviter tout fan-in
-    # (voir note plus haut sur le bug de double-exécution).
-    graph.add_edge("extraction", "jd_parsing")
+   
+    graph.add_conditional_edges("extraction", route_after_extraction, {
+        "jd_parsing": "jd_parsing",
+        END: END,
+    })
     graph.add_edge("jd_parsing", "skill_relevance")
     graph.add_edge("skill_relevance", "matching_scoring")
 
@@ -236,11 +276,7 @@ def build_graph():
     })
     graph.add_edge("send_email", END)
 
-    # checkpointer obligatoire : interrupt() a besoin d'un état persistant pour reprendre
-    # NB : sans ceci, LangGraph refuse de (dé)sérialiser nos modèles Pydantic
-    # (ResumeProfile, JobRequirements, MatchScore, SecurityFlag) dans le checkpoint,
-    # et la reprise après interrupt() rejoue la même pause au lieu de continuer
-    # au nœud suivant.
+    
     serde = JsonPlusSerializer(allowed_msgpack_modules=[
         ("state", "ResumeProfile"),
         ("state", "JobRequirements"),
@@ -265,6 +301,3 @@ if __name__ == "__main__":
     result = app.invoke({"cv_path": args.cv, "jd_text": jd_text}, config=config)
     print(result)
 
-    # si le graphe s'est arrêté sur une interruption, reprendre avec :
-    # app.invoke(Command(resume={"decision": "reject"}), config=config)
-    # app.invoke(Command(resume={"action": "approve"}), config=config)

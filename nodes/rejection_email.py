@@ -1,25 +1,23 @@
 """
-Génère un brouillon d'e-mail de refus. Ce nœud ne fait QUE générer le texte — il n'a aucun
-accès à l'outil d'envoi. L'envoi réel se fait exclusivement via mcp_servers/email_mcp_server.py,
-appelé depuis graph.py APRÈS le passage par le nœud d'interruption human_review_email.
+Génère un brouillon d'e-mail de refus sans l'envoyer. L'envoi passe par l'intégration Resend
+de graph.py uniquement après approbation via le nœud d'interruption human_review_email.
 """
 from __future__ import annotations
 import json
 import os
 from dotenv import load_dotenv
+from core.llm_client import client, MODEL_NAME
 
-try:
-    from mistralai.client import Mistral
-except ImportError:
-    from mistralai import Mistral
+
 
 from prompts.system_prompts import (
     REJECTION_EMAIL_SYSTEM_PROMPT, REJECTION_EMAIL_FEWSHOT, build_messages, extract_json_payload
 )
+from security.prompt_injection_guard import (
+    pre_llm_hook, post_llm_hook
+)
 
 load_dotenv()
-client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
-MODEL_NAME = os.getenv("MODEL_NAME", "mistral-small-latest")
 
 
 def _parse_email_draft(raw_text: str) -> dict:
@@ -42,8 +40,7 @@ def _parse_email_draft(raw_text: str) -> dict:
 def rejection_email_node(state: dict) -> dict:
     resume, job, score = state["resume"], state["job"], state["score"]
 
-    # entrée déjà structurée (pas de texte brut candidat) -> pas de sandwiching nécessaire ici,
-    # mais on garde le principe : seules les données validées/structurées alimentent ce nœud
+    # Structured fields can still contain text originating from untrusted documents.
     context = (
         f"Candidat: {resume.full_name}, poste: {job.title}. "
         f"Compétences déjà maîtrisées par le candidat: {resume.skills or 'non renseignées'}. "
@@ -52,10 +49,19 @@ def rejection_email_node(state: dict) -> dict:
         f"Expérience du candidat: {resume.years_experience} ans "
         f"(minimum requis: {job.min_years_experience} ans)."
     )
+    guard =  pre_llm_hook(
+        context,
+        "Rédige un brouillon d'email de refus factuel à partir des données fournies.",
+        "rejection_email",
+        classify=False,
+    )
 
-    messages = build_messages(REJECTION_EMAIL_SYSTEM_PROMPT, REJECTION_EMAIL_FEWSHOT, context)
 
-    response = client.chat.complete(
+    messages = build_messages(
+        REJECTION_EMAIL_SYSTEM_PROMPT, REJECTION_EMAIL_FEWSHOT, guard.sanitized_text
+    )
+
+    response = client.chat.completions.create(
         model=MODEL_NAME,
         max_tokens=600,
         temperature=0.4,
@@ -65,14 +71,14 @@ def rejection_email_node(state: dict) -> dict:
     draft_text = response.choices[0].message.content
     if not isinstance(draft_text, str):
         draft_text = str(draft_text)
-    draft = _parse_email_draft(draft_text)
-    # IMPORTANT : rejection_email_approved reste TOUJOURS False ici. Il y avait
-    # auparavant une auto-approbation (`bool(resume.email and os.getenv("RESEND_API_KEY"))`)
-    # qui envoyait le mail automatiquement dès qu'un email candidat était détecté et
-    # qu'une clé Resend était configurée — sans jamais qu'un humain ne le relise. C'est
-    # exactement ce que le point d'arrêt human_review_email_node (nodes/human_review.py)
-    # est censé empêcher. La seule façon d'approuver un envoi est une action humaine
-    # explicite via ce point d'arrêt.
+    draft_text = extract_json_payload(draft_text)
+
+    post_guard = post_llm_hook(draft_text, expected_schema_keys=["subject", "body"])
+    if post_guard.is_safe:
+        draft = json.loads(draft_text)
+    else:
+        # Repli : brouillon par défaut (le recruteur relit de toute façon l'email).
+        draft = _parse_email_draft("")
     return {
         "rejection_email_draft": draft,
         "rejection_email_approved": False,

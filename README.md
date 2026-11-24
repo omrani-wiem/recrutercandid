@@ -8,7 +8,9 @@ et on obtient un classement cliquable avec score, explication, décision et emai
 
 Architecture hybride : nœuds fonction déterministes + nœuds LLM single-shot orchestrés par LangGraph avec :
 - OCR à deux niveaux : extraction texte native → fallback Qwen VLM 
-- Gardrails anti prompt-injection sur tout contenu non fiable (CV, offres copiées-collées)
+- Classifieur ML local anti prompt-injection sur le texte avant/après les appels LLM,
+  plus consigne OCR dédiée à Qwen (le modèle d'environ 1,13 Go est téléchargé au premier
+  usage; une alerte sur le CV suspend l'analyse pour vérification humaine avant l'appel LLM)
 - Prompt engineering : Système de prompts construit avec la méthode CRAFT (Context, Role, Action, Format, Tone) + few-shot
 - Scoring par pondération apprise et déterministe, enrichi par un jugement LLM
   de correspondance des compétences, avec un contexte de vocabulaire propre à chaque domaine métier
@@ -28,6 +30,20 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 MISTRAL_API_KEY=placeholder python -m unittest discover -s tests -v
 ```
+
+Le test des fonctions n'accède pas au réseau. Pour évaluer réellement Sentence
+Transformers sur plusieurs CV/offres synthétiques, lancez ensuite
+`python scripts/evaluate_embedding_similarity.py` : le modèle multilingue est téléchargé
+au premier lancement et le script vérifie les similarités ainsi que les décisions
+retenue / revue humaine / rejet sur ces exemples.
+
+Pour vérifier l'invariance aux informations personnelles sur des paires synthétiques,
+lancez `python scripts/audit_scoring_bias.py`. Il compare les scores et décisions des
+mêmes profils de compétences avec âge, genre, nom, email et texte de formation différents.
+La similarité utilise uniquement les listes structurées de compétences du candidat et
+de l'offre : elle n'inclut ni nom, email, formation libre ni sections brutes du CV.
+Ce test contrefactuel n'est pas un audit statistique représentatif et ne détecte pas
+les effets indirects de variables comme les années d'expérience.
 
 **Avec une clé Mistral** : essayer l'application complète.
 
@@ -72,16 +88,16 @@ recrutercandid/
 │   ├── jd_parsing.py               # Offre -> JSON structuré (LLM single-shot)
 │   ├── skill_relevance.py          # Correspondance sémantique compétences (LLM, optionnel, contextualisé par domaine)
 │   ├── matching_scoring.py         # Similarité + filtres + scoring pondéré (fonction pure)
-│   ├── guardrails.py               # Biais / PII / cohérence (fonction + petit classifieur)
+│   ├── guardrails.py               # Signaux heuristiques PII + contrôle de structure du score
 │   ├── explanation.py              # Justification ancrée dans les faits extraits (LLM)
 │   ├── rejection_email.py          # Génère le brouillon de refus personnalisé (LLM), jamais auto-approuvé
 │   └── human_review.py             # Points d'interruption LangGraph (interrupt())
 ├── mcp_servers/
 │   ├── ocr_mcp_server.py           # Outil MCP : OCR Qwen VLM
-│   └── email_mcp_server.py         # Outil MCP : envoi d'e-mail (seul point de sortie réel)
-├── rl/
-│   ├── scoring_model.py            # Bandit contextuel : poids appris à partir du feedback recruteur
-│   └── feedback_store.py           # Journal des avis recruteur (👍/👎) en attente de prise en compte
+├── feedback_calibration/
+│   ├── scoring_model.py            # Recalibrage hors ligne des poids à partir des avis recruteur
+│   ├── feedback_store.py           # Journal des avis recruteur (👍/👎) en attente de prise en compte
+│   └── weights.json                # Poids actuellement utilisés
 └── data/                           # Créé automatiquement au premier lancement (jobs.json, candidates.json, cv_files/)
 ```
 
@@ -164,6 +180,13 @@ streamlit run app.py
 Quand un CV est scanné/image (extraction native de mauvaise qualité), le pipeline
 bascule sur `qwen_vlm_ocr`
 
+Le système n'affiche pas de « confiance Qwen » : le modèle ne fournit pas de score OCR
+calibré. Il calcule un score heuristique de qualité du texte extrait (longueur,
+caractères imprimables et présence de sections de CV), affiché comme estimation. Si ce
+score est inférieur à 0,55 ou indisponible, le choix shortlist/rejet est soumis à une
+revue humaine obligatoire. Cette heuristique ne garantit pas l'exactitude de la
+transcription ; le CV doit être vérifié visuellement.
+
 ### Option A
 ```bash
 # Dans .env
@@ -201,6 +224,21 @@ entièrement déterministe et auditable** : à poids et données égales, il don
 le même résultat — un choix volontaire pour un outil de recrutement (traçabilité,
 explicabilité en cas de contestation).
 
+La similarité de profil utilise le modèle local multilingue
+`paraphrase-multilingual-MiniLM-L12-v2` de Sentence Transformers, adapté notamment aux
+textes français. Au premier usage, le modèle doit être téléchargé et chargé localement.
+Si sa bibliothèque, son modèle ou son inférence sont indisponibles, le système journalise
+l'erreur et retombe sur une similarité Bag of Words ; la méthode employée est indiquée
+dans le détail du candidat. Les poids et seuils doivent être validés sur un jeu de
+candidatures annotées avant un usage réel : le remplacement des vecteurs change la
+distribution des similarités.
+
+Depuis le détail d'un candidat, le recruteur peut aussi afficher les cinq profils les
+plus proches parmi les candidats analysés pour la même offre. Le classement compare les
+compétences structurées avec le même modèle Sentence Transformers (ou le fallback Bag
+of Words) et n'altère ni le score ni la décision de recrutement : c'est un outil de
+comparaison à examiner par le recruteur.
+
 ### D'où vient le premier ingrédient (compétences en commun) ?
 
 Comparer des compétences mot pour mot est fragile : une offre qui dit "compétences en
@@ -220,9 +258,11 @@ utilisée pour ce candidat.
 
 **Ce calcul ne s'améliore pas tout seul avec l'usage.** Dans l'interface Streamlit,
 chaque candidat peut recevoir un avis du recruteur (👍/👎). Ces avis sont mis de côté
-(`rl/feedback_log.jsonl`) et ne sont pris en compte qu'après avoir cliqué sur
-« Tenir compte de mes avis » dans le menu de gauche, ce qui ajuste légèrement les
-poids ci-dessus (`offline_update` dans `rl/scoring_model.py`). Un ou deux avis isolés
+(`feedback_calibration/feedback_log.jsonl`) et ne sont pris en compte qu'après avoir
+cliqué sur « Tenir compte de mes avis » dans le menu de gauche, ce qui ajuste légèrement
+les poids ci-dessus (`calibrate_scoring_weights` dans
+`feedback_calibration/scoring_model.py`). C'est un ajustement hors ligne simple des poids
+à partir des avis recruteur. Un ou deux avis isolés
 ne changent presque rien au score affiché — c'est volontaire, pour éviter qu'un avis
 isolé ne déforme le calcul ; il faut accumuler plusieurs dizaines d'avis pour voir une
 vraie différence.

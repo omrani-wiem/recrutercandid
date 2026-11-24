@@ -1,6 +1,6 @@
 import unittest
 
-from graph import _build_resend_headers
+from core.graph import _build_resend_headers
 
 
 class ResendHeadersTests(unittest.TestCase):

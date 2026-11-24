@@ -13,13 +13,16 @@ from __future__ import annotations
 import json
 import os
 from dotenv import load_dotenv
+from core.llm_client import client, MODEL_NAME
+from core.state import SecurityFlag
+from security.prompt_injection_guard import pre_llm_hook, post_llm_hook
 
-try:
-    from mistralai.client import Mistral
-except ImportError:
-    from mistralai import Mistral
 
-from security.prompt_injection_guard import pre_llm_hook, post_llm_hook, escalate_if_unsafe
+
+from security.prompt_injection_guard import (
+     pre_llm_hook, post_llm_hook,
+)
+
 from prompts.system_prompts import (
     SKILL_RELEVANCE_SYSTEM_PROMPT,
     SKILL_RELEVANCE_FEWSHOT,
@@ -29,8 +32,6 @@ from prompts.system_prompts import (
 from prompts.domain_prompts import get_domain_context
 
 load_dotenv()
-client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
-MODEL_NAME = os.getenv("MODEL_NAME", "mistral-small-latest")
 
 
 def skill_relevance_node(state: dict) -> dict:
@@ -60,22 +61,25 @@ def skill_relevance_node(state: dict) -> dict:
 
     domain_context = get_domain_context(state.get("domain"))
     if domain_context:
-        # Contexte métier ajouté APRÈS les données candidat/offre (données non fiables),
-        # pour rester clairement distinct : c'est une aide au jugement, pas une donnée
-        # candidat/offre à interpréter comme telle.
         untrusted_text += f"\n\nContexte du domaine (repère de vocabulaire) : {domain_context}"
 
-    guard = pre_llm_hook(
+        guard = pre_llm_hook(
         untrusted_text=untrusted_text,
         task_instruction="Juge la correspondance entre les deux listes de compétences ci-dessus.",
         node_name="skill_relevance",
+        classify=False,
     )
-    escalate_if_unsafe(guard, "skill_relevance", security_flags)
-
+    if not guard.is_safe:
+        security_flags.append(SecurityFlag(
+            node="skill_relevance",
+            severity="warning",
+            reason="; ".join(guard.flags) + " — jugement LLM ignoré, repli mot-à-mot.",
+        ))
+        return {"skill_relevance_judgment": None, "security_flags": security_flags}
     messages = build_messages(SKILL_RELEVANCE_SYSTEM_PROMPT, SKILL_RELEVANCE_FEWSHOT, guard.sanitized_text)
 
     try:
-        response = client.chat.complete(
+        response = client.chat.completions.create(
             model=MODEL_NAME,
             max_tokens=500,
             temperature=0,
@@ -87,9 +91,17 @@ def skill_relevance_node(state: dict) -> dict:
         output_text = extract_json_payload(output_text)
 
         post_guard = post_llm_hook(output_text, expected_schema_keys=["matched_required", "missing_required"])
-        escalate_if_unsafe(post_guard, "skill_relevance_output", security_flags)
+        if not post_guard.is_safe:
+            security_flags.append(SecurityFlag(
+                node="skill_relevance_output",
+                severity="warning",
+                reason="; ".join(post_guard.flags),
+            ))
+            return {"skill_relevance_judgment": None, "security_flags": security_flags}
 
         judgment = json.loads(output_text)
+    except UnsafeLLMContentError:
+        raise
     except Exception:
         # Échec silencieux et non bloquant : le calcul du score retombe sur la
         # correspondance mot-à-mot classique (voir matching_scoring._skill_overlap).

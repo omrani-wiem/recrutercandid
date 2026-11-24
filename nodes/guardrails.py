@@ -38,7 +38,7 @@ def guardrails_node(state: dict) -> dict:
     unexpected = score_fields - allowed_features - {
         "final_score", "failed_filters", "matched_skills", "missing_skills",
         "candidate_years_experience", "required_years_experience",
-        "score_breakdown", "skill_matching_method",
+        "score_breakdown", "skill_matching_method", "similarity_method",
     }
     if unexpected:
         flags.append({
