@@ -11,7 +11,7 @@ Un second profil (étudiant) permet de chercher des offres à l'étranger et d'o
 ## Fonctionnalités
 
 **Profil recruteur**
-- Vivier de CV (import PDF, import depuis une boîte mail IMAP)
+- Vivier de CV (import PDF)
 - Gestion des offres par domaine
 - Analyse automatique : extraction, score sur 20, explication en français
 - Classement des candidats par offre, recherche de profils similaires
