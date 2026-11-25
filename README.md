@@ -1,4 +1,4 @@
-# Tri de CV assisté par IA (PFE)
+# Tri de CV assisté par IA 
 
 Application de présélection de candidatures qui analyse des CV (PDF), les compare à une offre d'emploi, calcule un score sur 20 et explique le résultat. **Le recruteur garde toujours la décision finale** : les cas ambigus et tout envoi d'email passent par une validation humaine.
 
