@@ -276,7 +276,28 @@ Langfuse (optionnel) : `docker compose up -d` dans le dossier `langfuse`, puis `
 ## Tests et évaluation
 
 
+## Tests et évaluation
 
+**31 tests unitaires et d'intégration exécutés avec succès** (`unittest`), couvrant les principales fonctionnalités du projet.
+
+- **Authentification** : gestion des comptes, prévention des doublons et vérification des identifiants.
+- **Similarité sémantique** : comparaison des profils, gestion des textes vides et fallback Bag of Words en cas d'indisponibilité du modèle.
+- **Matching et scoring** : évaluation de la pertinence des candidatures, prise en compte des compétences et rejet des profils hors sujet.
+- **Extraction JSON** : récupération et parsing des données structurées issues des réponses LLM.
+- **OCR et MCP** : validation des résultats OCR et gestion des erreurs retournées par les outils MCP.
+- **Pipeline de scoring** : validation des seuils de décision et des différents parcours de candidature.
+- **Recalibrage des poids** : vérification de l'impact des feedbacks recruteurs, de l'idempotence et de la validité des poids.
+- **Profils similaires** : classement des candidats selon leur similarité et fallback en cas d'indisponibilité des embeddings.
+- **Pertinence des compétences** : validation du matching assisté par LLM et des mécanismes de fallback.
+- **Helpers UI et emails** : validation des traitements de l'interface et des headers des requêtes Resend.
+
+### Exécution des tests
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+**Résultat : 31 tests réussis, 0 erreur.**
 ---
 
 ## Pistes d'amélioration
