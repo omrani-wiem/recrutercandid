@@ -4,7 +4,7 @@ Application de présélection de candidatures qui analyse des CV (PDF), les comp
 
 Un second profil (étudiant) permet de chercher des offres à l'étranger et d'obtenir un rapport d'amélioration de son CV.
 
-> Statut : projet de fin d'études. Outil d'aide à la décision, pas un système de recrutement automatique.
+> Statut : Outil d'aide à la décision, pas un système de recrutement automatique.
 
 ---
 
@@ -24,6 +24,47 @@ Un second profil (étudiant) permet de chercher des offres à l'étranger et d'o
 - Recherche d'offres (Adzuna, Arbeitnow)
 - Rapport d'amélioration du CV pour une offre précise
 - Génération d'une lettre de motivation
+
+---
+
+## Aperçu
+
+<!-- Place les captures dans docs/images/ avec exactement ces noms, ou adapte les chemins. -->
+
+### Interface recruteur
+
+| Choix du domaine | Offres et candidats |
+|---|---|
+| ![Accueil](docs/images/01-accueil.png) | ![Liste des candidats](docs/images/02-candidats.png) |
+
+| Détail d'un candidat : score et explication | Classement des candidats |
+|---|---|
+| ![Détail candidat](docs/images/03-detail-candidat.png) | ![Classement](docs/images/04-classement.png) |
+
+### Validations humaines
+
+| Revue de sécurité (CV signalé) | Décision en zone grise |
+|---|---|
+| ![Revue de sécurité](docs/images/05-revue-securite.png) | ![Zone grise](docs/images/06-zone-grise.png) |
+
+| Brouillon d'email de refus | Notification d'envoi (mode test) |
+|---|---|
+| ![Email de refus](docs/images/07-email-refus.png) | ![Email envoyé](docs/images/08-email-envoye.png) |
+
+### Autres fonctionnalités
+
+| Dossier de synthèse PDF | Interface étudiant |
+|---|---|
+| ![Synthèse PDF](docs/images/09-synthese-pdf.png) | ![Interface étudiant](docs/images/10-etudiant.png) |
+
+### Observabilité
+
+![Traces Langfuse](docs/images/11-langfuse.png)
+
+### Démonstration
+
+<!-- Optionnel : un GIF court (30 s) du parcours complet, ou un lien vers une vidéo. -->
+<!-- ![Démo](docs/images/demo.gif) -->
 
 ---
 
