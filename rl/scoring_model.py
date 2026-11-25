@@ -43,7 +43,7 @@ class ScoringModel:
         default_weights = cls().weights.copy()
 
         if MODEL_PATH.exists():
-            loaded = json.loads(MODEL_PATH.read_text())
+            loaded = json.loads(MODEL_PATH.read_text(encoding="utf-8"))
 
             # On fusionne les poids chargés dans les poids par défaut
             # pour garantir la présence des nouvelles features.
@@ -57,28 +57,66 @@ class ScoringModel:
         return cls(weights=default_weights)
 
     def save(self):
-        MODEL_PATH.write_text(json.dumps(self.weights, indent=2))
+        MODEL_PATH.write_text(
+    json.dumps(self.weights, indent=2),
+    encoding="utf-8"
+)
 
 
-def offline_update(feedback_log: list[dict], learning_rate: float = 0.01) -> ScoringModel:
+def _normalize_feature_weights(weights: dict[str, float]) -> None:
+    """Poids >= 0 et somme = 1, pour garder l'échelle du score et l'explicabilité."""
+    for k in FEATURE_ORDER:
+        weights[k] = max(0.0, weights[k])
+    total = sum(weights[k] for k in FEATURE_ORDER)
+    if total <= 0:
+        weights.update(ScoringModel().weights)
+        return
+    for k in FEATURE_ORDER:
+        weights[k] /= total
+
+
+def _dedupe_feedback(feedback_log: list[dict]) -> list[dict]:
+    """Un seul avis par couple (candidat, offre) : le dernier. Évite les clics répétés."""
+    latest: dict = {}
+    for i, entry in enumerate(feedback_log):
+        key = (entry.get("candidate_name"), entry.get("job_title"))
+        if not all(key):
+            key = ("#", i)
+        latest[key] = entry
+    return list(latest.values())
+
+
+def offline_update(
+    feedback_log: list[dict],
+    learning_rate: float = 0.02,
+    epochs: int = 10,
+) -> ScoringModel:
     """
-    feedback_log: [{"features": {...}, "reward": 0.0 ou 1.0}, ...]
+    Recalcule les poids à partir des poids PAR DÉFAUT et de tout l'historique d'avis.
+    Idempotent : l'appeler deux fois avec le même log donne le même résultat.
+
+    feedback_log: [{"features": {...}, "reward": 0.0 ou 1.0, ...}, ...]
     Descente de gradient simple sur une perte quadratique (modèle lisible et auditable).
     """
-    if not feedback_log:
-        return ScoringModel.load_latest()
+    model = ScoringModel()                       # toujours repartir des poids initiaux
+    entries = _dedupe_feedback(feedback_log or [])
+    if not entries:
+        model.save()
+        return model
 
-    model = ScoringModel.load_latest()
+    for _ in range(epochs):
+        for entry in entries:
+            features = entry.get("features", {})
+            target = float(entry["reward"])      # 1.0 = bon profil, 0.0 = mauvais : pas de Min-Max
+            error = target - model.predict(features)
 
-    for entry in feedback_log:
-        features = entry.get("features", {})
-        target = float(entry["reward"])          # 1.0 = bon profil, 0.0 = mauvais profil
-        error = target - model.predict(features)
+            for k in FEATURE_ORDER:
+                model.weights[k] += learning_rate * error * features.get(k, 0.0)
+            _normalize_feature_weights(model.weights)
 
-        for k in FEATURE_ORDER:
-            new_w = model.weights[k] + learning_rate * error * features.get(k, 0.0)
-            model.weights[k] = max(0.0, new_w)   # pas de poids négatif : reste interprétable
-        model.weights["bias"] = max(-0.2, min(0.2, model.weights["bias"] + learning_rate * error))
+            model.weights["bias"] = max(
+                -0.2, min(0.2, model.weights["bias"] + learning_rate * error)
+            )
 
     model.save()
     return model

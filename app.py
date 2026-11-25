@@ -19,7 +19,7 @@ from core.pipeline_runner import (
     STATUS_REJECTED_EMAIL_SENT, STATUS_REJECTED_EMAIL_CANCELLED,
     STATUS_REJECTED_EMAIL_FAILED, STATUS_ERROR,
 )
-from rl.feedback_store import append_feedback, load_feedback_log, clear_feedback_log
+from rl.feedback_store import append_feedback, load_feedback_log
 from rl.scoring_model import offline_update
 
 import services.auth as auth
@@ -183,19 +183,19 @@ with st.sidebar:
         st.divider()
         st.header("Amélioration du score")
         st.caption(
-            "Chaque avis 👍/👎 donné sur un candidat est mis de côté ici. Cliquez pour que "
-            "l'outil en tienne compte pour les prochaines évaluations."
+            "Les avis 👍/👎 sont conservés. Vous pouvez recalibrer les poids "
+            "à partir de l'ensemble des avis enregistrés."
         )
+
         pending_feedback = load_feedback_log()
-        st.caption(f"{len(pending_feedback)} avis en attente de prise en compte.")
-        if st.button("Tenir compte de mes avis"):
+        st.caption(f"{len(pending_feedback)} avis enregistrés.")
+
+        if st.button("Recalculer les poids à partir des avis"):
             if not pending_feedback:
                 st.warning("Aucun avis pour l'instant.")
-            else:
-                offline_update(pending_feedback)
-                clear_feedback_log()
-                st.success(f"{len(pending_feedback)} avis pris en compte.")
-
+        else:
+            offline_update(pending_feedback)
+            st.success(f"Poids recalculés à partir de {len(pending_feedback)} avis.")
         if st.session_state.view != "domains":
             st.divider()
             if st.button("🏠 Retour à l'accueil"):

@@ -116,7 +116,10 @@ Score final = modèle pondéré (poids apprenables) appliqué à quatre indicate
 
 Seuils de routage : `> 14` retenu, `< 8` refus, entre les deux revue humaine.
 
-Les poids sont mis à jour à partir des avis du recruteur (`rl/`).
+Les poids sont recalibrés à partir des feedbacks 👍/👎 des recruteurs.
+Les feedbacks sont conservés et le recalibrage s'appuie sur l'historique
+pour ajuster les poids des quatre indicateurs. Les poids restent non négatifs
+et normalisés (somme égale à 1).
 
 ---
 
@@ -272,7 +275,7 @@ Langfuse (optionnel) : `docker compose up -d` dans le dossier `langfuse`, puis `
 
 ## Tests et évaluation
 
-`À COMPLÉTER` : jeu de CV de référence, évaluation du classifieur (CV normaux contre CV avec injection), test d'équité (même CV avec un autre prénom ou genre, score identique attendu), comparaison OCR natif contre VLM.
+
 
 ---
 
