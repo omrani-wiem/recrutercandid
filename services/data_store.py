@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 JOBS_PATH = DATA_DIR / "jobs.json"
 CANDIDATES_PATH = DATA_DIR / "candidates.json"
 CV_FILES_DIR = DATA_DIR / "cv_files"

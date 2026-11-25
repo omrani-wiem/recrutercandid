@@ -12,14 +12,27 @@ from __future__ import annotations
 from langgraph.types import interrupt
 
 
+def _get(obj, key: str, default=None):
+    """Lit un champ sur un objet Pydantic ou sur un dict (selon la désérialisation)."""
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _to_dict(obj) -> dict:
+    if isinstance(obj, dict):
+        return obj
+    return obj.model_dump() if hasattr(obj, "model_dump") else {}
+
+
 def human_review_decision_node(state: dict) -> dict:
     payload = {
         "type": "decision_review",
-        "resume_name": state["resume"].full_name,
-        "job_title": state["job"].title,
-        "score": state["score"].model_dump(),
+        "resume_name": _get(state["resume"], "full_name", ""),
+        "job_title": _get(state["job"], "title", ""),
+        "score": _to_dict(state["score"]),
         "explanation": state.get("explanation", ""),
-        "security_flags": state.get("security_flags", []),
+        "security_flags": [_to_dict(f) for f in state.get("security_flags", [])],
         "action_required": "Choisir: 'shortlist' ou 'reject'",
     }
     human_decision = interrupt(payload)  # exécution suspendue ici jusqu'à reprise externe
@@ -27,21 +40,25 @@ def human_review_decision_node(state: dict) -> dict:
 
 
 def human_review_email_node(state: dict) -> dict:
+    resume = state["resume"]
     payload = {
         "type": "email_review",
-        "recipient": state["resume"].full_name,
+        "candidate_name": _get(resume, "full_name", ""),
+        "recipient": _get(resume, "email", None),
         "draft": state["rejection_email_draft"],
         "action_required": "Approuver, modifier, ou annuler l'envoi",
     }
     human_action = interrupt(payload)
+    action = human_action.get("action")
 
-    if human_action["action"] == "approve":
+    if action == "approve":
         return {"rejection_email_approved": True,
                 "rejection_email_draft": state["rejection_email_draft"]}
-    if human_action["action"] == "edit":
+    if action == "edit":
         return {"rejection_email_approved": True,
                 "rejection_email_draft": human_action["edited_draft"]}
-    # annulé par le recruteur : ne sera jamais envoyé. On marque explicitement la
-    # raison (plutôt que de laisser email_send_error à None) pour que l'UI distingue
-    # une annulation volontaire d'un échec technique d'envoi.
-    return {"rejection_email_approved": False, "email_send_error": "Envoi annulé par le recruteur"}
+
+    # Annulé (ou action inconnue) : ne sera jamais envoyé. La raison est marquée
+    # explicitement pour que l'UI distingue une annulation d'un échec technique.
+    return {"rejection_email_approved": False,
+            "email_send_error": "Envoi annulé par le recruteur"}

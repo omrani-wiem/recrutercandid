@@ -13,14 +13,13 @@ def explanation_node(state: dict) -> dict:
     resume, job, score = state["resume"], state["job"], state["score"]
 
     context = (
-        f"Candidat: {resume.years_experience} ans d'expérience, compétences: {resume.skills}.\n"
-        f"Poste: {job.title}, requis: {job.required_skills}, min expérience: "
-        f"{job.min_years_experience} ans.\n"
-        f"Score: similarité sémantique={score.semantic_similarity}, "
-        f"overlap compétences={score.skill_overlap_ratio}, "
-        f"filtres durs passés={score.hard_filters_passed}, score final={score.final_score}.\n"
+        f"Poste: {job.title}, expérience minimale: {job.min_years_experience} ans, "
+        f"expérience du candidat: {resume.years_experience} ans.\n"
+        f"Score final: {score.final_score}/20 (similarité sémantique={score.semantic_similarity}, "
+        f"overlap compétences={score.skill_overlap_ratio}, filtres durs passés={score.hard_filters_passed}).\n"
+        f"Compétences en commun: {score.matched_skills}. "
         f"Compétences manquantes: {score.missing_skills}. Filtres échoués: {score.failed_filters}."
-    )
+)
     guard = pre_llm_hook(
     context,
     "Explique les indicateurs et le score sans modifier la décision. Réponds uniquement en français.",

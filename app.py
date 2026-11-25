@@ -156,49 +156,50 @@ with st.sidebar:
         st.session_state.view = "domains"
         st.rerun()
     st.divider()
+
     if st.session_state.role == auth.ROLE_RECRUTEUR:
-     st.header("Vivier de CV")
-     st.caption("Un CV ajouté ici est automatiquement candidat à toutes les offres existantes.")
-     cv_files = st.file_uploader("Ajouter des CV (PDF)", type=["pdf"], accept_multiple_files=True, key="cv_uploader")
-     if cv_files and st.button("Ajouter au vivier"):
-         for f in cv_files:
-             data_store.add_candidate_cv(f.getvalue(), f.name, apply_to_all_jobs=True)
-         st.success(f"{len(cv_files)} CV ajouté(s) au vivier.")
-         st.rerun()
-
-    if st.button("📬 Récupérer les CV de la boîte mail"):
-     try:
-        cvs = fetch_cvs_from_mailbox()
-        for cv in cvs:
-            data_store.add_candidate_cv(cv["content"], cv["filename"], apply_to_all_jobs=True)
-        st.success(f"{len(cvs)} CV importé(s).")
-        if cvs:
+        st.header("Vivier de CV")
+        st.caption("Un CV ajouté ici est automatiquement candidat à toutes les offres existantes.")
+        cv_files = st.file_uploader(
+            "Ajouter des CV (PDF)", type=["pdf"], accept_multiple_files=True, key="cv_uploader"
+        )
+        if cv_files and st.button("Ajouter au vivier"):
+            for f in cv_files:
+                data_store.add_candidate_cv(f.getvalue(), f.name, apply_to_all_jobs=True)
+            st.success(f"{len(cv_files)} CV ajouté(s) au vivier.")
             st.rerun()
-     except Exception as exc:
-        st.error(f"Import impossible : {exc}")  
 
+        if st.button("📬 Récupérer les CV de la boîte mail"):
+            try:
+                cvs = fetch_cvs_from_mailbox()
+                for cv in cvs:
+                    data_store.add_candidate_cv(cv["content"], cv["filename"], apply_to_all_jobs=True)
+                st.success(f"{len(cvs)} CV importé(s).")
+                if cvs:
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"Import impossible : {exc}")
 
-     st.divider()
-     st.header("Amélioration du score")
-     st.caption(
-         "Chaque avis 👍/👎 donné sur un candidat est mis de côté ici. Cliquez pour que "
-         "l'outil en tienne compte pour les prochaines évaluations."
-     )
-     pending_feedback = load_feedback_log()
-     st.caption(f"{len(pending_feedback)} avis en attente de prise en compte.")
-     if st.button("Tenir compte de mes avis"):
-         if not pending_feedback:
-             st.warning("Aucun avis pour l'instant.")
-         else:
-             offline_update(pending_feedback)
-             clear_feedback_log()
-             st.success(f"{len(pending_feedback)} avis pris en compte.")
+        st.divider()
+        st.header("Amélioration du score")
+        st.caption(
+            "Chaque avis 👍/👎 donné sur un candidat est mis de côté ici. Cliquez pour que "
+            "l'outil en tienne compte pour les prochaines évaluations."
+        )
+        pending_feedback = load_feedback_log()
+        st.caption(f"{len(pending_feedback)} avis en attente de prise en compte.")
+        if st.button("Tenir compte de mes avis"):
+            if not pending_feedback:
+                st.warning("Aucun avis pour l'instant.")
+            else:
+                offline_update(pending_feedback)
+                clear_feedback_log()
+                st.success(f"{len(pending_feedback)} avis pris en compte.")
 
-     if st.session_state.view != "domains":
-         st.divider()
-         if st.button("🏠 Retour à l'accueil"):
-             go("domains")
-
+        if st.session_state.view != "domains":
+            st.divider()
+            if st.button("🏠 Retour à l'accueil"):
+                go("domains")
 
 # ---------------------------------------------------------------------------
 # Vue 1 : choix du domaine
@@ -457,6 +458,7 @@ def render_candidate_detail():
             "Ce CV n'a pas pu être lu correctement par l'outil (mise en page complexe ou "
             "fichier scanné). Vérifiez son contenu manuellement avant de vous fier au score."
         )
+        st.code(result.get("ocr_error"), language="text")
 
     if score:
         col1, col2, col3, col4 = st.columns(4)

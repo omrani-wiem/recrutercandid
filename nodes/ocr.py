@@ -5,7 +5,7 @@ via le serveur MCP mcp_servers/ocr_mcp_server.py).
 """
 from __future__ import annotations
 import re
-
+import time
 
 def extract_native_text(cv_path: str) -> str:
     """Extraction texte natif. pdfplumber gère la majorité des CV générés numériquement."""
@@ -13,7 +13,7 @@ def extract_native_text(cv_path: str) -> str:
     text_parts = []
     with pdfplumber.open(cv_path) as pdf:
         for page in pdf.pages:
-            text_parts.append(page.extract_text() or "")
+            text_parts.append(page.extract_text(x_tolerance=1.5 , y_tolerance=3) or "")
     return "\n".join(text_parts)
 
 
@@ -45,14 +45,15 @@ def compute_confidence(text: str) -> float:
 
 def ocr_node(state: dict) -> dict:
     """Nœud LangGraph : tente l'extraction native, calcule la confiance."""
+    t0 = time.perf_counter()
     text = extract_native_text(state["cv_path"])
     confidence = compute_confidence(text)
     return {
         "extracted_text": text,
         "ocr_confidence": confidence,
         "ocr_method": "native",
+        "ocr_seconds": round(time.perf_counter() - t0, 3),
     }
-
 
 def needs_vlm_fallback(state: dict) -> str:
     """Fonction de branchement conditionnel LangGraph (add_conditional_edges)."""

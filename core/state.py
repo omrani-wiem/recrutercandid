@@ -8,6 +8,8 @@ Schéma d'état du pipeline. C'est la seule structure qui transite entre les nœ
 from __future__ import annotations
 from typing import TypedDict, Optional, Literal
 from pydantic import BaseModel, Field
+from typing import TypedDict, Optional, Literal
+
 
 
 class ResumeProfile(BaseModel):
@@ -64,19 +66,23 @@ class PipelineState(TypedDict, total=False):
     # entrées brutes
     cv_path: str
     jd_text: str
-    domain: Optional[str]  # "commerce" | "tech" | "finance" | "operations" (voir prompts/domain_prompts.py)
+    domain: Optional[str]  # "commerce" | "tech" | "finance" | "operations"
 
     # sorties OCR
     extracted_text: str
     ocr_confidence: float
     ocr_method: Literal["native", "qwen_vlm", "qwen_vlm_failed"]
     ocr_error: Optional[str]
+    ocr_seconds: float
+    vlm_seconds: float
+
+    # anonymisation
+    anonymized_text: str
+    contact_info: dict
 
     # sorties structurées
     resume: ResumeProfile
     job: JobRequirements
-
-    
     skill_relevance_judgment: Optional[dict]
 
     # matching
@@ -89,15 +95,13 @@ class PipelineState(TypedDict, total=False):
     explanation: str
     rejection_email_draft: dict
     rejection_email_approved: bool
+    rejection_email_override: dict
     rejection_email_sent: bool
-    email_sent_to: str | None
+    email_sent_to: Optional[str]
     email_test_mode: bool
-    email_original_recipient: str | None
+    email_original_recipient: Optional[str]
     email_send_error: Optional[str]
 
     # sécurité / observabilité
     security_flags: list[SecurityFlag]
     trace_id: str
-
-    anonymized_text: str
-    contact_info: dict

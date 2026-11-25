@@ -18,7 +18,7 @@ import os
 import secrets
 from pathlib import Path
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 USERS_PATH = DATA_DIR / "users.json"
 
 ROLE_RECRUTEUR = "recruteur"

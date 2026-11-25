@@ -62,32 +62,23 @@ class ScoringModel:
 
 def offline_update(feedback_log: list[dict], learning_rate: float = 0.01) -> ScoringModel:
     """
-    feedback_log: [{"features": {...}, "reward": float}, ...]
-
-    Descente de gradient très simple sur une perte quadratique.
-    Pour le MVP, on garde un modèle lisible/auditable.
+    feedback_log: [{"features": {...}, "reward": 0.0 ou 1.0}, ...]
+    Descente de gradient simple sur une perte quadratique (modèle lisible et auditable).
     """
     if not feedback_log:
         return ScoringModel.load_latest()
 
     model = ScoringModel.load_latest()
 
-    rewards = np.array([e["reward"] for e in feedback_log], dtype=float)
-
-    if rewards.max() == rewards.min():
-        reward_norm = np.ones_like(rewards) * 0.5
-    else:
-        reward_norm = (rewards - rewards.min()) / (rewards.max() - rewards.min() + 1e-8)
-
-    for entry, target in zip(feedback_log, reward_norm):
+    for entry in feedback_log:
         features = entry.get("features", {})
-        pred = model.predict(features)
-        error = target - pred
+        target = float(entry["reward"])          # 1.0 = bon profil, 0.0 = mauvais profil
+        error = target - model.predict(features)
 
         for k in FEATURE_ORDER:
-            model.weights[k] += learning_rate * error * features.get(k, 0.0)
-
-        model.weights["bias"] += learning_rate * error
+            new_w = model.weights[k] + learning_rate * error * features.get(k, 0.0)
+            model.weights[k] = max(0.0, new_w)   # pas de poids négatif : reste interprétable
+        model.weights["bias"] = max(-0.2, min(0.2, model.weights["bias"] + learning_rate * error))
 
     model.save()
     return model

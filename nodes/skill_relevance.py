@@ -15,7 +15,7 @@ import os
 from dotenv import load_dotenv
 from core.llm_client import client, MODEL_NAME
 from core.state import SecurityFlag
-from security.prompt_injection_guard import pre_llm_hook, post_llm_hook
+from security.prompt_injection_guard import UnsafeLLMContentError, pre_llm_hook, post_llm_hook
 
 
 
@@ -32,7 +32,36 @@ from prompts.system_prompts import (
 from prompts.domain_prompts import get_domain_context
 
 load_dotenv()
+def _sanitize_judgment(judgment: dict, resume_skills, required, nice) -> dict:
+    """Un nom d'outil précis ne peut être « en commun » que si le candidat l'a littéralement."""
+    have = {s.strip().lower() for s in resume_skills}
 
+    def literally_has(skill: str) -> bool:
+        s = skill.strip().lower()
+        return any(s == h or s in h or h in s for h in have)
+
+    def is_specific(skill: str) -> bool:
+        # un nom court (1 à 2 mots) = un outil ou une techno précise ; une phrase = exigence générale
+        return len(skill.split()) <= 2
+
+    def clean(matched, universe):
+        universe_l = {u.lower(): u for u in universe}
+        out = []
+        for m in matched or []:
+            ref = universe_l.get(str(m).strip().lower())
+            if ref is None:
+                continue                      # le LLM a inventé une exigence
+            if is_specific(ref) and not literally_has(ref):
+                continue                      # outil précis non possédé : rejeté
+            out.append(ref)
+        return out
+
+    matched_req = clean(judgment.get("matched_required"), required)
+    judgment["matched_required"] = matched_req
+    judgment["missing_required"] = [r for r in required if r not in matched_req]
+    if "matched_nice_to_have" in judgment:
+        judgment["matched_nice_to_have"] = clean(judgment["matched_nice_to_have"], nice)
+    return judgment
 
 def skill_relevance_node(state: dict) -> dict:
     """
@@ -100,6 +129,7 @@ def skill_relevance_node(state: dict) -> dict:
             return {"skill_relevance_judgment": None, "security_flags": security_flags}
 
         judgment = json.loads(output_text)
+        judgment = _sanitize_judgment(judgment, resume_skills, required_skills, nice_to_have_skills)
     except UnsafeLLMContentError:
         raise
     except Exception:

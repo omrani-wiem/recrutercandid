@@ -56,7 +56,18 @@ rl/feedback_log.jsonl
 
 # MCP / local tool artifacts
 .mcp/
-.env
+
 
 
 GUIDE_ENTRETIEN_TECHNIQUE.md
+
+
+
+data/
+venv/
+*.bak
+
+rl/weights.json
+rl/feedback_log.jsonl
+langfuse/
+

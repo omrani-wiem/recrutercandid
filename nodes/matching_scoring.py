@@ -310,6 +310,8 @@ def _compute_score_breakdown(
 
 
 def matching_scoring_node(state: dict) -> dict:
+    global _scoring_model
+    _scoring_model = ScoringModel.load_latest() 
     resume, job = state["resume"], state["job"]
 
     resume_skills = getattr(resume, "skills", []) or []

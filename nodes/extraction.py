@@ -1,54 +1,63 @@
 """
-Nœud LLM (un seul appel, pas d'agent) : transforme le texte brut du CV en ResumeProfile.
-C'est le SEUL nœud du pipeline qui voit le texte brut du CV — une fois passé ce nœud, plus
-aucun autre appel LLM n'a accès au texte non structuré. Ça réduit drastiquement la surface
-d'attaque du prompt injection au reste du graphe.
+Nœud LLM (un seul appel, pas d'agent) : transforme le texte du CV en ResumeProfile.
+C'est le SEUL nœud du pipeline qui voit le texte du CV (masqué par anonymize_node) :
+une fois passé ce nœud, plus aucun autre appel LLM n'y a accès.
 """
 from __future__ import annotations
 import json
-import importlib
-import os
-from openai import OpenAI
+import re
+
 from dotenv import load_dotenv
+from langgraph.types import interrupt
+
 from core.state import ResumeProfile, SecurityFlag
 from core.llm_client import client, MODEL_NAME
 from security.prompt_injection_guard import (
     pre_llm_hook, post_llm_hook, escalate_if_unsafe,
 )
-
-
 from prompts.system_prompts import (
     CV_EXTRACTION_SYSTEM_PROMPT,
     CV_EXTRACTION_FEWSHOT,
     build_messages,
     extract_json_payload,
 )
-def interrupt(payload: dict):
-    """Load LangGraph's interrupt when a human review is actually required."""
-    try:
-        return importlib.import_module("langgraph.types").interrupt(payload)
-    except (ImportError, AttributeError) as exc:
-        raise RuntimeError(
-            "Security review requires LangGraph; install the 'langgraph' package."
-        ) from exc
-
 
 load_dotenv()
 
-
 EXPECTED_KEYS = ["full_name", "skills", "years_experience", "education", "certifications"]
+
+_TITLE_WORDS = re.compile(
+    r"(?i)\b(étudiant|étudiante|etudiant|etudiante|ingénieur|ingenieur|développeur|"
+    r"developpeur|stagiaire|consultant|responsable|manager|analyste|chef|master|"
+    r"licence|llm|rag|cv|curriculum)\b"
+)
+_UNKNOWN = "INCONNU — échec extraction"
+
+
+def clean_full_name(name: str) -> str:
+    """Ne garde que prénom + nom : coupe aux séparateurs et aux mots de titre."""
+    name = name or ""
+    if "[" in name:                      # le LLM a recopié un marqueur [NOM]
+        return ""
+    name = re.split(r"[|·•,:(]|\s[-–—]\s", name)[0]   # garde les noms composés (Jean-Pierre)
+    m = _TITLE_WORDS.search(name)
+    if m:
+        name = name[:m.start()]
+    return " ".join(name.split()[:4]).strip()
 
 
 def extraction_node(state: dict) -> dict:
-    raw_text = state["extracted_text"]
-    security_flags = state.get("security_flags", [])
+    # Texte masqué si l'anonymisation a tourné, sinon texte brut.
+    raw_text = state.get("anonymized_text") or state["extracted_text"]
+    security_flags = list(state.get("security_flags", []))
+    contact = state.get("contact_info") or {}
 
-    # --- hook pré-LLM : scan + sandwiching --------------------------------------------
+    # --- hook pré-LLM : classifieur anti-injection + sandwiching ----------------------
     guard = pre_llm_hook(
         untrusted_text=raw_text,
         task_instruction="Extrais les informations du CV ci-dessus au format JSON défini.",
         node_name="extraction",
-         classify=False,
+        classify=True,
     )
     security_review_approved = False
     if not guard.is_safe:
@@ -83,7 +92,6 @@ def extraction_node(state: dict) -> dict:
     messages = build_messages(
         CV_EXTRACTION_SYSTEM_PROMPT, CV_EXTRACTION_FEWSHOT, guard.sanitized_text
     )
-
     response = client.chat.completions.create(
         model=MODEL_NAME,
         max_tokens=1300,
@@ -95,7 +103,7 @@ def extraction_node(state: dict) -> dict:
         output_text = str(output_text)
     output_text = extract_json_payload(output_text)
 
-        # --- hook post-LLM : vérifie que la sortie est bien un JSON conforme --------------
+    # --- hook post-LLM : JSON valide + clés attendues ---------------------------------
     post_guard = post_llm_hook(output_text, expected_schema_keys=EXPECTED_KEYS)
     if not post_guard.is_safe:
         security_flags.append(SecurityFlag(
@@ -104,7 +112,7 @@ def extraction_node(state: dict) -> dict:
             reason="; ".join(post_guard.flags),
         ))
         return {
-            "resume": ResumeProfile(full_name="INCONNU — échec extraction"),
+            "resume": ResumeProfile(full_name=_UNKNOWN),
             "security_flags": security_flags,
             "security_review_approved": security_review_approved,
             "security_review_rejected": False,
@@ -113,15 +121,19 @@ def extraction_node(state: dict) -> dict:
     try:
         data = json.loads(output_text)
         resume = ResumeProfile(**data)
-        resume.full_name = state["contact_info"]["full_name"] or resume.full_name
     except (json.JSONDecodeError, TypeError, ValueError) as e:
-        # échec de parsing = on ne devine jamais, on route vers la revue humaine
         security_flags.append(SecurityFlag(
             node="extraction",
             severity="warning",
             reason=f"échec de parsing JSON: {e}",
         ))
-        resume = ResumeProfile(full_name="INCONNU — échec extraction")
+        resume = ResumeProfile(full_name=_UNKNOWN)
+    else:
+        # Identité réinjectée APRÈS le LLM (il ne l'a jamais vue grâce à l'anonymisation).
+        name = clean_full_name(contact.get("full_name") or "") or clean_full_name(resume.full_name)
+        resume.full_name = name or _UNKNOWN
+        if contact.get("email"):
+            resume.email = contact["email"]
 
     return {
         "resume": resume,

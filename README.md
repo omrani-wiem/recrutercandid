@@ -1,293 +1,254 @@
-# Système multi-agent de matching CV / offres d'emploi
+# Tri de CV assisté par IA (PFE)
 
-[![CI](https://github.com/omrani-wiem/recrutercandid/actions/workflows/ci.yml/badge.svg)](https://github.com/omrani-wiem/recrutercandid/actions/workflows/ci.yml)
+Application de présélection de candidatures qui analyse des CV (PDF), les compare à une offre d'emploi, calcule un score sur 20 et explique le résultat. **Le recruteur garde toujours la décision finale** : les cas ambigus et tout envoi d'email passent par une validation humaine.
 
-Interface façon "site carrière côté RH" : on choisit un domaine (Commerce, Tech, Finance,
-Opérations), on parcourt ses offres, on voit les CV qui ont candidaté, on lance l'analyse,
-et on obtient un classement cliquable avec score, explication, décision et email de refus.
+Un second profil (étudiant) permet de chercher des offres à l'étranger et d'obtenir un rapport d'amélioration de son CV.
 
-Architecture hybride : nœuds fonction déterministes + nœuds LLM single-shot orchestrés par LangGraph avec :
-- OCR à deux niveaux : extraction texte native → fallback Qwen VLM 
-- Classifieur ML local anti prompt-injection sur le texte avant/après les appels LLM,
-  plus consigne OCR dédiée à Qwen (le modèle d'environ 1,13 Go est téléchargé au premier
-  usage; une alerte sur le CV suspend l'analyse pour vérification humaine avant l'appel LLM)
-- Prompt engineering : Système de prompts construit avec la méthode CRAFT (Context, Role, Action, Format, Tone) + few-shot
-- Scoring par pondération apprise et déterministe, enrichi par un jugement LLM
-  de correspondance des compétences, avec un contexte de vocabulaire propre à chaque domaine métier
-- Génération d'e-mails de refus personnalisés (recommandations concrètes basées sur le profil réel),
-  avec **relecture humaine obligatoire avant tout envoi** — le graphe se met en pause et attend une
-  action explicite du recruteur, il ne peut jamais deviner une approbation
-- Envoi d'e-mail exposé comme outil MCP séparé (le LLM ne peut jamais envoyer directement)
-- Persistance simple en JSON (offres, candidats, résultats) 
-## Démo rapide (5 minutes)
+> Statut : projet de fin d'études. Outil d'aide à la décision, pas un système de recrutement automatique.
 
-**Sans clé d'API** : lancer les tests (ils simulent les appels LLM, aucun réseau nécessaire).
+---
 
-```bash
-git clone https://github.com/omrani-wiem/recrutercandid.git
-cd recrutercandid
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-MISTRAL_API_KEY=placeholder python -m unittest discover -s tests -v
+## Fonctionnalités
+
+**Profil recruteur**
+- Vivier de CV (import PDF, import depuis une boîte mail IMAP)
+- Gestion des offres par domaine
+- Analyse automatique : extraction, score sur 20, explication en français
+- Classement des candidats par offre, recherche de profils similaires
+- Zone grise (score entre 8 et 14) : décision humaine « shortlister / rejeter »
+- Brouillon d'email de refus, relu et validé par le recruteur avant envoi
+- Dossier de synthèse PDF pour les candidats retenus
+- Avis 👍/👎 pris en compte pour recalibrer les poids du score
+
+**Profil étudiant**
+- Recherche d'offres (Adzuna, Arbeitnow)
+- Rapport d'amélioration du CV pour une offre précise
+- Génération d'une lettre de motivation
+
+---
+
+## Architecture
+
+Le pipeline est un graphe LangGraph avec points d'arrêt humains.
+
+```mermaid
+flowchart TD
+    A[PDF du CV] --> B[OCR natif pdfplumber]
+    B -->|confiance suffisante| C[Anonymisation PII]
+    B -->|confiance faible| V[OCR de secours VLM via MCP]
+    V -->|succès| C
+    V -->|échec| X[Arrêt : statut Erreur]
+    C --> D[Extraction LLM : ResumeProfile]
+    D -->|CV signalé par le classifieur| R1[/Revue de sécurité humaine/]
+    R1 --> D
+    D --> E[Parsing de l'offre LLM]
+    E --> F[Pertinence des compétences LLM]
+    F --> G[Scoring déterministe]
+    G --> H[Garde-fous]
+    H --> I[Explication LLM]
+    I -->|score &gt; 14| S[Retenu]
+    I -->|score &lt; 8| M[Brouillon email de refus]
+    I -->|8 à 14| R2[/Décision humaine/]
+    R2 --> S
+    R2 --> M
+    M --> R3[/Validation de l'email/]
+    R3 --> N[Envoi via Resend]
 ```
 
-Le test des fonctions n'accède pas au réseau. Pour évaluer réellement Sentence
-Transformers sur plusieurs CV/offres synthétiques, lancez ensuite
-`python scripts/evaluate_embedding_similarity.py` : le modèle multilingue est téléchargé
-au premier lancement et le script vérifie les similarités ainsi que les décisions
-retenue / revue humaine / rejet sur ces exemples.
+**Principes de conception**
+- **Le LLM ne décide jamais.** Il extrait et explique. Le score est calculé par du code déterministe (`nodes/matching_scoring.py`), donc auditable.
+- **Un seul nœud voit le texte du CV** (l'extraction). Les nœuds suivants reçoivent des données structurées.
+- **Échec ouvert côté pipeline, fermé côté décision** : un échec technique (OCR, LLM) produit un statut « Erreur », jamais un faux score ou un faux « Retenu ».
 
-Pour vérifier l'invariance aux informations personnelles sur des paires synthétiques,
-lancez `python scripts/audit_scoring_bias.py`. Il compare les scores et décisions des
-mêmes profils de compétences avec âge, genre, nom, email et texte de formation différents.
-La similarité utilise uniquement les listes structurées de compétences du candidat et
-de l'offre : elle n'inclut ni nom, email, formation libre ni sections brutes du CV.
-Ce test contrefactuel n'est pas un audit statistique représentatif et ne détecte pas
-les effets indirects de variables comme les années d'expérience.
+---
 
-**Avec une clé Mistral** : essayer l'application complète.
+## Calcul du score
 
-```bash
-cp env.example .env         # renseigner MISTRAL_API_KEY (les autres variables sont optionnelles)
-python scripts/generate_sample_pdf.py   # régénère samples/example_cv.pdf si besoin
-streamlit run app.py
+Score final = modèle pondéré (poids apprenables) appliqué à quatre indicateurs, ramené sur 20 :
+
+| Indicateur | Description |
+|---|---|
+| Similarité sémantique | Embeddings `paraphrase-multilingual-MiniLM-L12-v2` (repli : Bag of Words) |
+| Recouvrement des compétences | Jugement du LLM (nœud `skill_relevance`), repli sur correspondance par mots-clés |
+| Expérience | Score continu : 1 si le minimum est atteint, pénalité douce en dessous |
+| Filtres obligatoires | Certifications requises |
+
+Seuils de routage : `> 14` retenu, `< 8` refus, entre les deux revue humaine.
+
+Les poids sont mis à jour à partir des avis du recruteur (`rl/`).
+
+---
+
+## Sécurité et confidentialité
+
+| Mesure | Détail |
+|---|---|
+| Classifieur anti-injection | Modèle local XLM-RoBERTa multilingue, appliqué au texte brut du CV. Si le texte est signalé, le recruteur le vérifie avant tout appel au LLM |
+| Encadrement du contenu non fiable | Balises `<untrusted_document>` + rappel de tâche, et échappement du balisage |
+| Validation des sorties | Les sorties JSON du LLM sont validées (JSON valide, clés attendues) ; sinon repli sans blocage |
+| Validation humaine | Zone grise et tout email de refus |
+| Anonymisation (PII masking) | Email, téléphone, URL, âge, genre, adresse et nom masqués avant l'extraction LLM. L'identité est réinjectée après |
+| Authentification | Deux rôles (recruteur, étudiant). Mots de passe hachés (PBKDF2-SHA256 + sel), comparaison en temps constant, aucun mot de passe en dur |
+| Secrets | Dans `.env`, jamais commités |
+| Droit à l'effacement | Un candidat peut être retiré : son fichier CV et ses résultats sont supprimés |
+
+### Limites à connaître
+
+- **Fallback VLM :** pour un CV scanné, la page entière (y compris photo et coordonnées) est envoyée à une **API externe** (Groq). Le chemin natif reste 100 % local. Le fallback peut être désactivé.
+- **Anonymisation :** elle réduit le biais mais ne l'élimine pas (école, parcours, loisirs). Le nom est détecté par NER et peut produire des faux positifs ou négatifs. `À COMPLÉTER : résultats du test d'équité`
+- **Classifieur :** il peut produire des faux positifs sur des CV légitimes. `À COMPLÉTER : précision / rappel mesurés`
+- **Mode test email :** avec le plan gratuit de Resend, les emails ne peuvent partir que vers l'adresse du compte. La variable `EMAIL_TEST_RECIPIENT` redirige donc tous les envois. Pour envoyer aux vrais candidats, il faut vérifier un domaine sur Resend.
+- **Authentification :** adaptée à une démonstration (pas de verrouillage après échecs répétés, pas de réinitialisation de mot de passe). Une mise en production demanderait un fournisseur d'identité.
+- **Stockage :** fichiers JSON locaux dans `data/`, sans écriture atomique. À remplacer par une base de données en production.
+- **Échelle du score :** la sigmoïde borne le score final entre environ 3,6 et 16,4 sur 20. Les seuils de routage (8 et 14) sont calibrés sur cette plage.
+- **Apprentissage par avis :** les avis du recruteur ajustent les poids ; ils peuvent donc transmettre ses propres biais au modèle.
+- **Checkpoints en mémoire :** les analyses en pause sont perdues si l'application redémarre. Il faut alors cliquer sur « Réinitialiser » et relancer l'analyse.
+
+---
+
+## Observabilité
+
+Les appels LLM et les nœuds du graphe sont tracés avec **Langfuse auto-hébergé** (Docker), donc les traces restent sur la machine. Les durées `ocr_seconds` et `vlm_seconds` permettent de comparer l'OCR natif et le fallback VLM.
+
+Attention : les traces contiennent l'état des nœuds, donc le texte des CV. Ne pas utiliser Langfuse cloud sans masquer les entrées.
+
+---
+
+## Stack technique
+
+Python, Streamlit, LangGraph, Ollama (`qwen2.5:7b`), sentence-transformers, Hugging Face Transformers (classifieur), spaCy, pdfplumber, PyMuPDF, MCP, Groq (VLM de secours), Resend, reportlab, Langfuse, Pydantic.
+
+---
+
+## Structure du projet
+
 ```
-
-1. Ouvrir <http://localhost:8501>. Au premier lancement, les mots de passe des comptes de démo
-   `recruteur` et `etudiant` sont ceux de `DEMO_RECRUITER_PASSWORD` / `DEMO_STUDENT_PASSWORD`
-   dans `.env`, ou, s'ils sont vides, des mots de passe aléatoires affichés **une seule fois dans
-   le terminal**.
-2. Se connecter en `recruteur`. Quatre offres d'exemple (Tech, Finance, Commerce, Opérations) sont déjà créées.
-3. Dans la barre latérale, **Vivier de CV** : ajouter `samples/example_cv.pdf` (un CV de Data Engineer).
-4. Choisir le domaine **Tech**, ouvrir l'offre *Data Engineer Senior*, puis cliquer sur
-   **Analyser / relancer les candidats**.
-5. Consulter le classement et le détail du candidat : score sur 20, explication, décision
-   (shortlist, zone grise ou rejet) et, en cas de rejet, brouillon d'e-mail de refus **à valider
-   avant tout envoi**.
-
-L'envoi réel d'e-mails (Resend), l'OCR des CV scannés (Qwen VLM) et la recherche d'offres côté
-étudiant (Adzuna) sont optionnels : sans leurs clés, le reste de l'application fonctionne.
-
-## Structure
-
-```
-recrutercandid/
-├── app.py                          # Interface Streamlit : domaines -> offres -> candidats -> classement -> détail
-├── data_store.py                   # Persistance JSON (offres, candidats, résultats) + offres d'exemple
-├── pipeline_runner.py              # Pont entre l'UI et les pauses/reprises du graphe LangGraph
-├── state.py                        # Schéma d'état LangGraph (source de vérité du pipeline)
-├── graph.py                        # Assemblage du graphe (nœuds, branchements, interruptions)
+selection_cv/
+├── app.py                  # interface Streamlit
+├── core/
+│   ├── graph.py            # définition du graphe LangGraph
+│   ├── state.py            # schémas Pydantic et état du pipeline
+│   ├── pipeline_runner.py  # pauses, reprises, statuts normalisés
+│   └── llm_client.py       # client LLM (compatible OpenAI / Ollama)
+├── nodes/                  # ocr, anonymize, extraction, jd_parsing,
+│                           # skill_relevance, matching_scoring, guardrails,
+│                           # explanation, rejection_email, human_review
 ├── security/
-│   └── prompt_injection_guard.py   # Hooks pre/post-LLM anti prompt-injection
-├── prompts/
-│   ├── system_prompts.py           # Prompts CRAFT + few-shot pour chaque nœud LLM
-│   └── domain_prompts.py           # Contexte de vocabulaire métier par domaine (Commerce/Tech/Finance/Opérations)
-├── nodes/
-│   ├── ocr.py                      # Extraction texte native + décision de fallback
-│   ├── extraction.py               # CV -> JSON structuré (LLM single-shot)
-│   ├── jd_parsing.py               # Offre -> JSON structuré (LLM single-shot)
-│   ├── skill_relevance.py          # Correspondance sémantique compétences (LLM, optionnel, contextualisé par domaine)
-│   ├── matching_scoring.py         # Similarité + filtres + scoring pondéré (fonction pure)
-│   ├── guardrails.py               # Signaux heuristiques PII + contrôle de structure du score
-│   ├── explanation.py              # Justification ancrée dans les faits extraits (LLM)
-│   ├── rejection_email.py          # Génère le brouillon de refus personnalisé (LLM), jamais auto-approuvé
-│   └── human_review.py             # Points d'interruption LangGraph (interrupt())
+│   └── prompt_injection_guard.py
+├── prompts/                # prompts système et exemples
+├── services/               # auth, data_store, cv_advisor, job_search,
+│                           # mail_ingest, summary_pdf
+├── rl/                     # avis recruteur et mise à jour des poids
 ├── mcp_servers/
-│   ├── ocr_mcp_server.py           # Outil MCP : OCR Qwen VLM
-├── feedback_calibration/
-│   ├── scoring_model.py            # Recalibrage hors ligne des poids à partir des avis recruteur
-│   ├── feedback_store.py           # Journal des avis recruteur (👍/👎) en attente de prise en compte
-│   └── weights.json                # Poids actuellement utilisés
-└── data/                           # Créé automatiquement au premier lancement (jobs.json, candidates.json, cv_files/)
+│   └── ocr_mcp_server.py   # outil OCR (VLM) exposé via MCP
+├── ui/                     # fonctions utilitaires de l'interface
+├── data/                   # données locales (ignoré par git)
+└── tests/                  # À COMPLÉTER
 ```
 
-## Où sont stockées les données
+---
 
-Tout est dans `data/` (créé automatiquement, ignoré par Git) :
-- `data/jobs.json` — les offres d'emploi (quelques offres d'exemple sont créées au premier
-  lancement, une par domaine ; modifiable directement dans ce fichier ou via l'interface)
-- `data/candidates.json` — les CV uploadés, avec pour chacun la liste des offres auxquelles
-  il "candidate" (par défaut : toutes, comme demandé) et les résultats d'évaluation par offre
-- `data/cv_files/` — copies des PDF uploadés
+## Installation
 
-Aucune base de données : c'est volontairement de simples fichiers JSON, faciles à ouvrir et
-modifier à la main. `data/` est dans `.gitignore` car `candidates.json` et `cv_files/`
-contiennent des données personnelles (CV, noms, emails) — ne les committez pas. Si vous
-voulez versionner uniquement vos offres, vous pouvez forcer l'ajout de `data/jobs.json`
-seul (`git add -f data/jobs.json`).
-
-## Principe de sécurité central
-
-**Aucun nœud LLM n'a d'accès direct à un outil qui a un effet de bord réel** (envoi d'e-mail,
-écriture en base, notification candidat). Ces outils vivent exclusivement dans des serveurs MCP
-appelés par le graphe *après* validation humaine, jamais appelés directement par un modèle sur
-la base d'un texte de CV, qui est une entrée non fiable par définition.
-
-## Installation (Ubuntu)
-
-### 1. Créer et activer un environnement virtuel
+Prérequis : Python 3.11, [Ollama](https://ollama.com), Docker Desktop (optionnel, pour Langfuse).
 
 ```bash
-# Se placer dans le dossier du projet
-cd recrutercandid
-
-# Créer l'environnement virtuel (dossier .venv)
-python3 -m venv .venv
-
-# L'activer (à refaire à chaque nouvelle session de terminal)
-source .venv/bin/activate
-
-# Votre invite de commande doit maintenant afficher (.venv) au début
-```
-
-Pour désactiver l'environnement virtuel plus tard : `deactivate`.
-
-### 2. Installer les dépendances
-
-```bash
-pip install --upgrade pip
+git clone <URL_DU_DEPOT>
+cd selection_cv
+python -m venv venv
+venv\Scripts\activate          # Windows
 pip install -r requirements.txt
-# Dépendance requise pour l'extraction PDF native
-pip install pdfplumber
+python -m spacy download fr_core_news_md
+ollama pull qwen2.5:7b
 ```
 
-### 3. Configurer les clés d'API
+Par défaut, Ollama utilise un contexte de 4096 tokens, trop court pour un prompt d'extraction avec un CV de deux pages (troncature silencieuse). Créer un modèle avec un contexte plus large :
 
-```bash
-cp env.example .env
-nano .env   # ou l'éditeur de votre choix, renseignez MISTRAL_API_KEY, RESEND_API_KEY, etc.
+```powershell
+"FROM qwen2.5:7b`nPARAMETER num_ctx 8192" | Set-Content Modelfile
+ollama create qwen2.5-cv -f Modelfile
 ```
 
-### 4. Lancer l'application
+Puis renseigner `LLM_MODEL=qwen2.5-cv` dans `.env`. Vérifier avec `ollama ps` que la colonne `CONTEXT` affiche 8192.
 
-```bash
-streamlit run app.py
+Le modèle du classifieur anti-injection et le modèle d'embeddings sont téléchargés automatiquement au premier lancement (connexion internet requise une fois).
+
+### Configuration
+
+Copier `.env.example` en `.env` et renseigner les valeurs :
+
 ```
+# Comptes de démonstration (si vides, un mot de passe aléatoire est généré
+# et affiché une seule fois dans la console au premier lancement)
+DEMO_RECRUITER_PASSWORD=
+DEMO_STUDENT_PASSWORD=
 
-L'application s'ouvre automatiquement dans votre navigateur (par défaut sur
-`http://localhost:8501`). Si vous avez démarré un serveur Qwen VLM à l'étape
-précédente (option B), il doit tourner dans un terminal séparé pendant que
-Streamlit tourne dans celui-ci.
+# Modèle de langage (Ollama par défaut)
+LLM_BASE_URL=http://localhost:11434/v1
+LLM_MODEL=qwen2.5-cv
+LLM_API_KEY=ollama
+LLM_TIMEOUT_SECONDS=180
 
-### Récapitulatif (une fois tout installé)
+# Email (Resend)
+RESEND_API_KEY=
+RESEND_SENDER_EMAIL=onboarding@resend.dev
+EMAIL_TEST_RECIPIENT=          # mode test : redirige tous les envois
 
-```bash
-source .venv/bin/activate
-streamlit run app.py
-```
+# Import des CV par boîte mail (IMAP, mot de passe d'application)
+IMAP_HOST=imap.gmail.com
+IMAP_USER=
+IMAP_PASSWORD=
 
-## OCR (Qwen VLM) 
-Quand un CV est scanné/image (extraction native de mauvaise qualité), le pipeline
-bascule sur `qwen_vlm_ocr`
-
-Le système n'affiche pas de « confiance Qwen » : le modèle ne fournit pas de score OCR
-calibré. Il calcule un score heuristique de qualité du texte extrait (longueur,
-caractères imprimables et présence de sections de CV), affiché comme estimation. Si ce
-score est inférieur à 0,55 ou indisponible, le choix shortlist/rejet est soumis à une
-revue humaine obligatoire. Cette heuristique ne garantit pas l'exactitude de la
-transcription ; le CV doit être vérifié visuellement.
-
-### Option A
-```bash
-# Dans .env
+# OCR de secours (VLM)
 QWEN_VLM_URL=https://api.groq.com/openai/v1/chat/completions
-QWEN_VLM_API_KEY=votre_clé_groq
-QWEN_VLM_MODEL=qwen/qwen3-vl-32b-instruct
-```
-### Option B : auto-hébergement local avec vLLM (nécessite un GPU dédié)
+QWEN_VLM_API_KEY=
+QWEN_VLM_MODEL=
+QWEN_VLM_TIMEOUT_SECONDS=60
 
-Uniquement si vous disposez d'un GPU avec suffisamment de VRAM et d'espace disque libre
-(vérifiez avec `df -h` avant de lancer l'installation — comptez 5 à 10 Go rien que pour
-PyTorch/CUDA) :
+# Recherche d'offres
+ADZUNA_APP_ID=
+ADZUNA_APP_KEY=
+
+# Observabilité (Langfuse auto-hébergé)
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+LANGFUSE_HOST=http://localhost:3000
+```
+
+`À COMPLÉTER : vérifier les noms exacts des variables dans services/auth.py et services/job_search.py.`
+
+### Lancement
 
 ```bash
-pip install vllm
-vllm serve Qwen/Qwen2.5-VL-7B-Instruct --port 8001
+streamlit run app.py
 ```
 
-## Comment le score de compatibilité est calculé
+Ouvrir `http://localhost:8501`. Lancer l'application depuis la racine du projet (les chemins `data/` et `mcp_servers/` sont relatifs).
 
-Le score final n'est **pas** décidé par un LLM qui "juge" le candidat — c'est un calcul
-fixe, basé sur 4 ingrédients, chacun avec un poids d'importance :
+Langfuse (optionnel) : `docker compose up -d` dans le dossier `langfuse`, puis `http://localhost:3000`.
 
-| Ingrédient | Poids | Ce que ça mesure |
-|---|---|---|
-| Compétences en commun | 35% | Part des compétences demandées par l'offre que le candidat possède |
-| Expérience | 25% | Années du candidat comparées au minimum demandé par l'offre |
-| Ressemblance générale du profil | 30% | À quel point le texte du CV "ressemble" au texte de l'offre |
-| Conditions obligatoires | 10% | Certifications ou exigences indispensables, respectées ou non |
+---
 
-Ces 4 notes (chacune comprise entre 0 et 1) sont combinées selon leur poids, puis
-ramenées sur une échelle de 0 à 20 (voir `_scoring_model.predict` et
-`_compute_score_breakdown` dans `nodes/matching_scoring.py`). **Ce calcul final reste
-entièrement déterministe et auditable** : à poids et données égales, il donne toujours
-le même résultat — un choix volontaire pour un outil de recrutement (traçabilité,
-explicabilité en cas de contestation).
+## Tests et évaluation
 
-La similarité de profil utilise le modèle local multilingue
-`paraphrase-multilingual-MiniLM-L12-v2` de Sentence Transformers, adapté notamment aux
-textes français. Au premier usage, le modèle doit être téléchargé et chargé localement.
-Si sa bibliothèque, son modèle ou son inférence sont indisponibles, le système journalise
-l'erreur et retombe sur une similarité Bag of Words ; la méthode employée est indiquée
-dans le détail du candidat. Les poids et seuils doivent être validés sur un jeu de
-candidatures annotées avant un usage réel : le remplacement des vecteurs change la
-distribution des similarités.
+`À COMPLÉTER` : jeu de CV de référence, évaluation du classifieur (CV normaux contre CV avec injection), test d'équité (même CV avec un autre prénom ou genre, score identique attendu), comparaison OCR natif contre VLM.
 
-Depuis le détail d'un candidat, le recruteur peut aussi afficher les cinq profils les
-plus proches parmi les candidats analysés pour la même offre. Le classement compare les
-compétences structurées avec le même modèle Sentence Transformers (ou le fallback Bag
-of Words) et n'altère ni le score ni la décision de recrutement : c'est un outil de
-comparaison à examiner par le recruteur.
+---
 
-### D'où vient le premier ingrédient (compétences en commun) ?
+## Pistes d'amélioration
 
-Comparer des compétences mot pour mot est fragile : une offre qui dit "compétences en
-analyse de données" au lieu de "Python, SQL" ne matchera jamais un candidat qui liste
-littéralement "Python, SQL" dans ses compétences, même si c'est exactement ce qui est
-demandé. Le pipeline utilise donc en priorité un nœud LLM dédié
-(`nodes/skill_relevance.py`) qui juge la correspondance sémantique entre les deux
-listes — **uniquement cette correspondance**, jamais le score final ni une décision
-d'embauche. Ce jugement (quelle compétence a été jugée équivalente à quoi) est
-conservé et visible, donc toujours vérifiable a posteriori.
+- Checkpointer persistant (SQLite) pour survivre aux redémarrages
+- Domaine vérifié pour l'envoi réel des emails
+- OCR de secours entièrement local (Ollama ou Tesseract) pour supprimer toute sortie de données
+- Masquage des données personnelles dans les traces Langfuse pour un usage cloud
+- Évaluation systématique des explications (LLM-as-judge)
 
-Si cet appel échoue (LLM indisponible, réponse mal formée) ou n'est pas configuré, le
-pipeline retombe automatiquement sur une correspondance mot-à-mot classique (avec une
-petite table de synonymes), plus limitée mais 100% locale et sans dépendance réseau.
-Dans l'interface, l'infobulle sur "Compétences en commun" indique quelle méthode a été
-utilisée pour ce candidat.
+---
 
-**Ce calcul ne s'améliore pas tout seul avec l'usage.** Dans l'interface Streamlit,
-chaque candidat peut recevoir un avis du recruteur (👍/👎). Ces avis sont mis de côté
-(`feedback_calibration/feedback_log.jsonl`) et ne sont pris en compte qu'après avoir
-cliqué sur « Tenir compte de mes avis » dans le menu de gauche, ce qui ajuste légèrement
-les poids ci-dessus (`calibrate_scoring_weights` dans
-`feedback_calibration/scoring_model.py`). C'est un ajustement hors ligne simple des poids
-à partir des avis recruteur. Un ou deux avis isolés
-ne changent presque rien au score affiché — c'est volontaire, pour éviter qu'un avis
-isolé ne déforme le calcul ; il faut accumuler plusieurs dizaines d'avis pour voir une
-vraie différence.
+## Licence
 
-## Seuils de routage
+`À COMPLÉTER`
 
-Une fois le score calculé (sur 20), le pipeline décide automatiquement quoi faire :
-- score > 14 → shortlist automatique
-- score < 8 → rejet automatique (génération d'un brouillon d'email de refus, à valider)
-- entre 8 et 14 → zone grise, revue humaine obligatoire (`human_review_decision`)
+## Auteure
 
-Ces seuils sont centralisés dans `nodes/matching_scoring.py` (`REJECT_THRESHOLD`,
-`SHORTLIST_THRESHOLD`) — à ajuster selon vos besoins métier.
-
-## Prompts par domaine (Commerce, Tech, Finance, Opérations)
-
-`prompts/domain_prompts.py` contient un **premier jet** de contexte de vocabulaire métier
-pour chaque domaine (ex: en finance, "analyse de données" évoque Excel/Power BI, pas Python ;
-en tech, l'inverse). Ce contexte est injecté dans l'appel LLM de `nodes/skill_relevance.py`
-pour l'aider à juger la correspondance des compétences sans se tromper de domaine.
-
-C'est un point de départ à ajuster, pas une liste figée : le LLM garde la liberté de juger
-au-delà de ce qui y est écrit. Pour l'enrichir, éditez simplement le texte associé à chaque
-domaine dans `DOMAIN_SKILL_CONTEXT` — pas besoin de toucher au code des nœuds.
-
-Pour ajouter un nouveau domaine : ajoutez sa clé dans `DOMAIN_SKILL_CONTEXT` et
-`DOMAIN_LABELS` (`prompts/domain_prompts.py`) — c'est la seule source de vérité,
-`data_store.py` importe `DOMAIN_LABELS` de là pour rester synchronisé automatiquement.
+Wiem Omrani, ENICarthage.
